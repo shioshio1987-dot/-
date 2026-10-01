@@ -89,9 +89,9 @@ const shotDir = process.argv[2] || null;
     assert.strictEqual(await page.inputValue('#f-device'), '', '機器も選び直してもらう');
     assert.strictEqual(await page.inputValue('#f-supplier'), '');
     assert.strictEqual(await page.textContent('#id-hint'), '空欄なら 3 になります');
-    const row = t.values('患者一覧', 'A3:J3')[0];
-    assert.deepStrictEqual([row[0], row[1], row[2], row[3], t.ymdOf(row[6]), row[8], row[9]],
-      [2, '新規 花子', 'AirSense10', 'RISEF', '2026/09/20', 'サイドバーから', '利用中']);
+    const row = t.values('患者一覧', 'A3:L3')[0];
+    assert.deepStrictEqual([row[0], row[1], row[2], row[3], row[6], t.ymdOf(row[7]), row[9], row[10]],
+      [2, '新規 花子', 'AirSense10', 'RISEF', '○', '2026/09/20', 'サイドバーから', '利用中'], '対象は最初から○');
   });
   await step('同じ名前なら確認が出て、「登録する」で登録できる', async () => {
     await page.fill('#f-name', '既存 太郎');
@@ -103,6 +103,16 @@ const shotDir = process.argv[2] || null;
     await page.click('#reg-msg button.primary');
     await page.waitForSelector('#reg-msg.ok');
     assert.strictEqual(t.values('患者一覧', 'B4')[0][0], '既存 太郎');
+  });
+  await step('「レポート対象（○）にする」を外して登録すると○なし', async () => {
+    assert.strictEqual(await page.isChecked('#f-target'), true, '登録のたびにチェックは戻る');
+    await page.fill('#f-name', '対象外 三郎');
+    await page.selectOption('#f-device', 'SBOX');
+    await page.uncheck('#f-target');
+    await page.click('#reg-btn');
+    await page.waitForSelector('#reg-msg.ok');
+    assert.deepStrictEqual([t.values('患者一覧', 'B5')[0][0], t.values('患者一覧', 'G5')[0][0]], ['対象外 三郎', '']);
+    assert.strictEqual(await page.isChecked('#f-target'), true);
   });
   await step('業者が複数ある機器に変えると、前の業者は引き継がない', async () => {
     await page.selectOption('#f-device', 'SBOX');
@@ -140,11 +150,12 @@ const shotDir = process.argv[2] || null;
     t.select('患者一覧', ['A2:A4']);
     await page.click('#sel-btn');
     await page.waitForSelector('#sel-msg.info');
-    assert.strictEqual(await page.textContent('#sel-msg'), '選択中：3人');
+    assert.ok((await page.textContent('#sel-msg')).startsWith('選択中：3人'), await page.textContent('#sel-msg'));
     await page.click('#apply-btn');
     await page.waitForSelector('#rep-msg.ok');
-    assert.ok((await page.textContent('#rep-msg')).includes('3人'));
-    assert.deepStrictEqual(t.display('患者一覧', 'E2:F2'), [['2026/09/01', '2026/09/30']]);
+    assert.ok((await page.textContent('#rep-msg')).includes('3人（対象に○も付けました）'));
+    assert.deepStrictEqual(t.display('患者一覧', 'E2:G4'), [
+      ['2026/09/01', '2026/09/30', '○'], ['2026/09/01', '2026/09/30', '○'], ['2026/09/01', '2026/09/30', '○']]);
   });
   await step('日付欄に触るとその選択肢が選ばれる／前後が逆ならエラー', async () => {
     await page.fill('#fix-start', '2026-09-30');
@@ -162,6 +173,22 @@ const shotDir = process.argv[2] || null;
     await page.waitForSelector('#rep-msg.ok');
     assert.deepStrictEqual(t.display('患者一覧', 'E2:F2'), [['', '']]);
   });
+  await step('対象（○）だけを外す・付ける・すべて消す', async () => {
+    t.select('患者一覧', ['A3:A4']);
+    await page.click('#mark-off-btn');
+    await page.waitForSelector('#mark-msg.ok');
+    assert.deepStrictEqual(t.values('患者一覧', 'G2:G4'), [['○'], [''], ['']]);
+    await page.click('#mark-on-btn');
+    await page.waitForFunction(() => document.getElementById('mark-msg').textContent.includes('付けました'));
+    assert.deepStrictEqual(t.values('患者一覧', 'G2:G4'), [['○'], ['○'], ['○']]);
+    await page.click('#mark-clear-btn');
+    await page.waitForSelector('#mark-msg.ask');
+    assert.ok((await page.textContent('#mark-msg')).includes('いま 3人に○'));
+    if (shotDir) await page.screenshot({ path: path.join(shotDir, 'sidebar-marks.png'), fullPage: true });
+    await page.click('#mark-msg button.primary');
+    await page.waitForSelector('#mark-msg.ok');
+    assert.deepStrictEqual(t.values('患者一覧', 'G2:G5'), [[''], [''], [''], ['']]);
+  });
   await step('別のタブを選んでいるときは案内を出す', async () => {
     t.select('ダッシュボード', ['A1']);
     await page.click('#sel-btn');
@@ -171,7 +198,7 @@ const shotDir = process.argv[2] || null;
   await step('集計を今すぐ更新', async () => {
     await page.click('#refresh-btn');
     await page.waitForSelector('#refresh-msg.ok');
-    assert.ok((await page.textContent('#refresh-msg')).includes('集計を更新しました（3人）'));
+    assert.ok((await page.textContent('#refresh-msg')).includes('集計を更新しました（4人）'));
   });
   await step('ページのエラーがない', async () => {
     assert.deepStrictEqual(errors, []);

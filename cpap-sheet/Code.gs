@@ -42,6 +42,7 @@ var INPUT_TABS = { ledger: true, master: true };
 
 var STATUS_ACTIVE = '利用中';
 var STATUS_EXIT = '離脱';
+var TARGET_MARK = '○';   // 対象の印（印刷してもそのまま読めるよう、チェックボックスではなく文字）
 var NONE = '（未入力）';
 var ALL_OPTION = 'すべて';
 
@@ -57,6 +58,11 @@ var LEDGER = [
     note: 'レポートを出す期間の初日です。\n' +
           'まとめて入れるときは、行を選んでメニュー［CPAP管理］→［レポート期間をまとめて入力］。' },
   { key: 'repEnd', head: 'レポート終了日', width: 105, date: true, note: 'レポートを出す期間の最終日です。' },
+  { key: 'target', head: '対象', width: 50,
+    note: 'レポートを出す人に「○」を入れます（何を入れても○になります。×・0 は空欄に）。\n' +
+          '空欄＝対象外です。離脱日を入れると空欄に戻ります。\n' +
+          'まとめて付ける・外す：行を選んでメニュー［CPAP管理］→［レポート（期間・対象○）をまとめて入力］\n' +
+          'すべて消す：メニュー［CPAP管理］→［対象（○）をすべて消す］' },
   { key: 'intro', head: '導入日', width: 100, date: true,
     note: 'CPAPを始めた日です。月別・週別の「導入数」はこの日で数えます。' },
   { key: 'exit', head: '離脱日', width: 100, date: true,
@@ -107,6 +113,7 @@ var OLD_HEADERS = {
   supplier: ['仕入先', '業者', '社名'],
   repStart: ['開始日', 'レポート開始日'],
   repEnd:   ['終了日', 'レポート終了日'],
+  target:   ['対象'],
   intro:    ['導入日'],
   exit:     ['離脱日'],
   note:     ['その他', '備考'],
@@ -144,7 +151,8 @@ function onOpen() {
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('CPAP管理')
     .addItem('新規登録フォーム', 'openRegisterForm')
-    .addItem('レポート期間をまとめて入力', 'openReportForm')
+    .addItem('レポート（期間・対象○）をまとめて入力', 'openReportForm')
+    .addItem('対象（○）をすべて消す', 'clearTargetMarks')
     .addSeparator()
     .addItem('集計を今すぐ更新', 'refreshNow')
     .addItem('匿名データを作る（外部での分析用）', 'makeAnonymousSheet')
@@ -325,13 +333,26 @@ function ensureLedger_() {
     return head.indexOf(HEAD.name) >= 0 && head.indexOf(HEAD.intro) >= 0;
   });
   var head = rowText_(sh, 1);
-  var hasHead = head.some(function (h) { return h !== ''; });
-  var missing = LEDGER.filter(function (c) { return head.indexOf(c.head) < 0; })
-    .map(function (c) { return c.head; });
-  if (missing.length) {
-    var start = hasHead ? sh.getLastColumn() + 1 : 1;
-    ensureSize_(sh, 2, start + missing.length - 1);
-    sh.getRange(1, start, 1, missing.length).setValues([missing]);
+  if (!head.some(function (h) { return h !== ''; })) {
+    // 新しいシート：見出しを順番どおりに書く
+    ensureSize_(sh, 2, LEDGER.length);
+    sh.getRange(1, 1, 1, LEDGER.length).setValues([LEDGER.map(function (col) { return col.head; })]);
+  } else {
+    // 足りない列は本来の位置（ひとつ前の列のすぐ右）に差し込む。前の列がなければ右端に足す
+    LEDGER.forEach(function (col, i) {
+      head = rowText_(sh, 1);
+      if (head.indexOf(col.head) >= 0) return;
+      var after = 0;
+      for (var j = i - 1; j >= 0 && !after; j--) after = head.indexOf(LEDGER[j].head) + 1;
+      if (after) {
+        sh.insertColumnAfter(after);
+        sh.getRange(1, after + 1).setValue(col.head);
+      } else {
+        var last = sh.getLastColumn() + 1;
+        ensureSize_(sh, 2, last);
+        sh.getRange(1, last).setValue(col.head);
+      }
+    });
   }
 
   ensureSize_(sh, LEDGER_MIN_ROWS, 1);
@@ -347,6 +368,7 @@ function ensureLedger_() {
   });
   sh.getRange(2, c.id, n, 1).setHorizontalAlignment('center');
   sh.getRange(2, c.status, n, 1).setHorizontalAlignment('center');
+  sh.getRange(2, c.target, n, 1).setHorizontalAlignment('center').setFontWeight('bold');
   sh.setFrozenRows(1);
   if (c.name <= 3) sh.setFrozenColumns(c.name);
   return sh;
@@ -360,6 +382,9 @@ function applyLedgerRules_() {
   requireCols_(c);
   var n = sh.getMaxRows() - 1;
   applyListRules_();
+  sh.getRange(2, c.target, n, 1).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList([TARGET_MARK], true).setAllowInvalid(true)
+    .setHelpText('レポートを出す人に「○」（何を入れても○になります）').build());
   sh.getRange(2, c.status, n, 1).setDataValidation(SpreadsheetApp.newDataValidation()
     .requireValueInList([STATUS_ACTIVE, STATUS_EXIT], true).setAllowInvalid(true).build());
   var dateRule = SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(true)
@@ -435,10 +460,14 @@ function ledgerFormatRules_(sh, c) {
   add('=AND(ISNUMBER(' + L('repStart') + '2),ISNUMBER(' + L('repEnd') + '2),' +
     L('repEnd') + '2<' + L('repStart') + '2)', [col('repStart'), col('repEnd')], C_ALERT, C_ALERT_FONT);
   // オレンジ：確認してほしいもの
+  add('=AND(' + L('status') + '2="' + STATUS_EXIT + '",' + L('target') + '2<>"")', [col('target')], C_WARN, C_WARN_FONT);
   add('=AND(' + L('status') + '2="' + STATUS_EXIT + '",' + L('exit') + '2="")', [col('exit')], C_WARN, C_WARN_FONT);
   add('=AND(' + L('status') + '2="' + STATUS_EXIT + '",' + L('reason') + '2="")', [col('reason')], C_WARN, C_WARN_FONT);
   add('=AND(' + named + ',COUNTIF(' + L('name') + ':' + L('name') + ',' + L('name') + '2)>1)',
     [col('name')], C_WARN, C_WARN_FONT);
+  // 水色：対象（○）なのにレポート期間が入っていない
+  add('=AND(' + L('target') + '2<>"",OR(' + L('repStart') + '2="",' + L('repEnd') + '2=""))',
+    [col('repStart'), col('repEnd')], C_TODO);
   // グレー：離脱した人（行全体）
   add('=' + L('status') + '2="' + STATUS_EXIT + '"', [sh.getRange(2, 1, n, c.lastCol)], C_EXIT_BG, C_EXIT_FONT);
   return rules;
@@ -521,6 +550,12 @@ function onLedgerEdit_(e, sh) {
       else msgs.push(row + '行目の' + HEAD[k] + '「' + v + '」は日付として読めません。');
     });
 
+    // 1b) 対象：何か入れたら「○」に（×・0 などは空欄に）
+    if (touched('target')) {
+      var mark = targetMark_(get('target'));
+      if (get('target') !== mark) put('target', mark);
+    }
+
     var name = trim_(get('name'));
     if (!name) return;
 
@@ -555,8 +590,12 @@ function onLedgerEdit_(e, sh) {
       msgs.push(row + '行目：離脱日も入れてください（月別・週別の離脱数に使います）。');
     }
     if (want && want !== status) put('status', want);
-    if (touched('exit') && exitDn !== null && exitDn <= today && !trim_(get('reason'))) {
-      msgs.push(row + '行目：離脱理由も選んでください。');
+    if (touched('exit') && exitDn !== null && exitDn <= today) {
+      if (get('target') !== '' && !touched('target')) {
+        put('target', '');   // 旧バージョンと同じく、離脱したら対象から外す
+        msgs.push(row + '行目：離脱したので対象（○）を外しました。');
+      }
+      if (!trim_(get('reason'))) msgs.push(row + '行目：離脱理由も選んでください。');
     }
 
     // 4) 機器 → 業者（1社だけなら自動で入れる）
@@ -590,10 +629,10 @@ function onLedgerEdit_(e, sh) {
   }
 }
 
-/** 機器別一覧の黄色いセル（機器・業者・状態）を変えたら、その場で表示を切り替える */
+/** 機器別一覧の黄色いセル（機器・業者・状態・対象）を変えたら、その場で表示を切り替える */
 function onDeviceSelectorEdit_(e) {
   var r = e.range;
-  if (r.getRow() > 3 || r.getLastRow() < 3 || r.getLastColumn() < 3 || r.getColumn() > 5) return;
+  if (r.getRow() > 3 || r.getLastRow() < 3 || r.getLastColumn() < 3 || r.getColumn() > 6) return;
   var ctx = loadContext_();
   writeDeviceList_(ctx, categoryLists_(ctx));
 }
@@ -698,6 +737,7 @@ function registerPatient(form) {
       name: name, device: device, supplier: supplier,
       repStart: repStart === null ? '' : dnToCellDate_(repStart),
       repEnd: repEnd === null ? '' : dnToCellDate_(repEnd),
+      target: form.target === false ? '' : TARGET_MARK,
       intro: dnToCellDate_(intro), exit: '', note: trim_(form.note),
       status: STATUS_ACTIVE, reason: ''
     };
@@ -719,13 +759,15 @@ function registerPatient(form) {
 function getSelectionInfo() {
   initTz_();
   var sel = selectedLedgerRows_();
-  return { count: sel.targets.length, message: selectionText_(sel) };
+  var marked = sel.targets.filter(function (t) { return targetMark_(t.values[sel.cols.target - 1]) === TARGET_MARK; });
+  return { count: sel.targets.length, message: selectionText_(sel) + '\nうち対象（○）が付いている人：' + marked.length + '人' };
 }
 
 /**
  * 選んだ行のレポート期間を入れる／消す。
  *   mode: 'fixed'（開始日〜終了日を指定）／'continue'（前回の終了日の翌日〜終了日）／'clear'
- * 離脱した人と、フィルタで隠れている行は対象にしません。
+ *   mark: true なら、期間を入れた人の「対象」に○も付ける
+ * 離脱した人と、フィルタで隠れている行には入れません。
  */
 function applyReportPeriod(req) {
   initTz_();
@@ -764,14 +806,58 @@ function applyReportPeriod(req) {
     }
     sh.getRange(t.row, c.repStart).setValue(dnToCellDate_(s));
     sh.getRange(t.row, c.repEnd).setValue(dnToCellDate_(end));
+    if (req.mark) sh.getRange(t.row, c.target).setValue(TARGET_MARK);
     done++;
   });
   SpreadsheetApp.flush();
-  var msg = (req.mode === 'clear' ? 'レポート期間を消しました：' : 'レポート期間を入れました：') + done + '人';
+  var msg = (req.mode === 'clear' ? 'レポート期間を消しました：' : 'レポート期間を入れました：') + done + '人' +
+    (req.mark && req.mode !== 'clear' && done ? '（対象に○も付けました）' : '');
   if (skipped.length) {
     msg += '\n入れなかった行：' + skipped.slice(0, 10).join('、') + (skipped.length > 10 ? ' ほか' : '');
   }
   return { message: msg };
+}
+
+/** 選んだ行の「対象」に○を付ける（mode 'on'）／外す（mode 'off'）。外すときは離脱した人も含める */
+function setTargetMarks(req) {
+  initTz_();
+  var on = req && req.mode === 'on';
+  var sel = selectedLedgerRows_(!on);
+  if (!sel.targets.length) throw new Error('対象の行がありません。' + selectionText_(sel));
+  sel.targets.forEach(function (t) {
+    sel.sheet.getRange(t.row, sel.cols.target).setValue(on ? TARGET_MARK : '');
+  });
+  SpreadsheetApp.flush();
+  return { message: (on ? '対象に○を付けました：' : '対象の○を外しました：') + sel.targets.length + '人' };
+}
+
+/** 対象（○）をすべて消す。confirmed でないときは、いくつ付いているかだけ返す */
+function clearAllTargets(req) {
+  var sh = findSheet_('ledger');
+  if (!sh) throw configError_('「' + SH.ledger + '」タブがありません。先に初期セットアップを実行してください。');
+  var c = ledgerCols_(sh);
+  requireCols_(c);
+  var vals = columnValues_(sh, c.target);
+  var count = vals.filter(function (v) { return targetMark_(v) === TARGET_MARK; }).length;
+  if (!req || !req.confirmed) return { count: count, done: false };
+  if (vals.length) sh.getRange(2, c.target, vals.length, 1).clearContent();
+  SpreadsheetApp.flush();
+  return { count: count, done: true, message: '対象（○）をすべて消しました：' + count + '人' };
+}
+
+/** メニュー：対象（○）をすべて消す（レポートを出し終わったあとに使う） */
+function clearTargetMarks() {
+  withUi_(function () {
+    var ui = SpreadsheetApp.getUi();
+    var n = clearAllTargets({}).count;
+    if (!n) {
+      ui.alert('対象（○）が付いている人はいません。');
+      return;
+    }
+    if (ui.alert('対象（○）をすべて消す', 'いま ' + n + '人に「○」が付いています。すべて空欄に戻しますか？\n' +
+        '（レポート期間はそのまま残ります）', ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
+    ss_().toast(clearAllTargets({ confirmed: true }).message, 'CPAP管理', 5);
+  });
 }
 
 function refreshFromSidebar() {
@@ -780,8 +866,8 @@ function refreshFromSidebar() {
                    : '集計を更新しました（' + r.patients + '人）。';
 }
 
-/** 患者一覧で選ばれている行（離脱・空行・フィルタで隠れた行は除く） */
-function selectedLedgerRows_() {
+/** 患者一覧で選ばれている行（空行・フィルタで隠れた行と、includeExited でなければ離脱した人も除く） */
+function selectedLedgerRows_(includeExited) {
   var ss = ss_();
   var sh = ss.getActiveSheet();
   if (sh.getName() !== SH.ledger) {
@@ -807,7 +893,7 @@ function selectedLedgerRows_() {
     var v = block[row - first];
     if (!trim_(v[c.name - 1])) { sel.blank++; return; }
     if (filtered && sh.isRowHiddenByFilter(row)) { sel.hidden++; return; }
-    if (trim_(v[c.status - 1]) === STATUS_EXIT) { sel.exited++; return; }
+    if (!includeExited && trim_(v[c.status - 1]) === STATUS_EXIT) { sel.exited++; return; }
     sel.targets.push({ row: row, values: v });
   });
   return sel;
@@ -898,7 +984,10 @@ function parsePatient_(r, c, row, today) {
     device: trim_(g('device')), supplier: trim_(g('supplier')), note: trim_(g('note')),
     status: trim_(g('status')), reason: trim_(g('reason')), raw: {}, bad: {}, fix: {}
   };
-  p.hasData = !!(p.idText || p.device || p.supplier || p.note || p.reason);
+  var mark = targetMark_(g('target'));
+  p.target = mark === TARGET_MARK;
+  p.targetFix = g('target') !== mark ? mark : null;   // ○ 以外の書き方（TRUE・x など）は同期のときに直す
+  p.hasData = !!(p.idText || p.device || p.supplier || p.note || p.reason || p.target);
   DATE_KEYS.forEach(function (k) {
     var v = g(k);
     p.raw[k] = v;
@@ -934,6 +1023,10 @@ function syncLedger_(ctx) {
       p.raw[k] = d;
     }
     p.fix = {};
+    if (p.targetFix !== null) {
+      put(p, 'target', p.targetFix);
+      p.targetFix = null;
+    }
     if (!p.idText && idInfo.auto) {
       put(p, 'id', idInfo.next);
       p.id = idInfo.next;
@@ -1059,7 +1152,8 @@ function dashboardStats_(patients, today, lists) {
   var within = function (dn, a, b) { return dn !== null && dn >= a && dn <= b; };
   var k = {
     active: 0, activeLastMonthEnd: 0, introThisMonth: 0, introLastMonth: 0, exitThisMonth: 0,
-    exitLastMonth: 0, introThisWeek: 0, introLastWeek: 0, total: patients.length, totalExit: 0
+    exitLastMonth: 0, introThisWeek: 0, introLastWeek: 0, total: patients.length, totalExit: 0,
+    marked: 0, markedNoPeriod: 0
   };
   var table = function (names) {
     var map = {};
@@ -1074,6 +1168,10 @@ function dashboardStats_(patients, today, lists) {
     var newThisMonth = within(p.intro, mStart, today);
     if (active) k.active++;
     if (exited) k.totalExit++;
+    if (p.target) {
+      k.marked++;
+      if (p.repStart === null || p.repEnd === null) k.markedNoPeriod++;
+    }
     if (activeAt_(p, lmEnd)) k.activeLastMonthEnd++;
     if (newThisMonth) k.introThisMonth++;
     if (within(p.intro, lmStart, lmEnd)) k.introLastMonth++;
@@ -1217,6 +1315,12 @@ function dataChecks_(ctx) {
     return p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart;
   }));
   add('名前が空欄の行（ほかの欄には入力あり）', 'error', ctx.orphans);
+  add('対象（○）なのにレポート期間が空欄', 'warn', P.filter(function (p) {
+    return p.target && (p.repStart === null || p.repEnd === null);
+  }));
+  add('離脱しているのに対象（○）が付いている', 'warn', P.filter(function (p) {
+    return p.target && p.status === STATUS_EXIT;
+  }));
   add('「離脱」なのに離脱日が空欄（月別・週別の離脱数に入りません）', 'warn', P.filter(function (p) {
     return p.status === STATUS_EXIT && p.exit === null && !p.bad.exit;
   }));
@@ -1403,7 +1507,7 @@ function costStats_(patients, master, today) {
 // ============================================================
 // 書き出し：ダッシュボード
 // ============================================================
-var DASH_W = [150, 75, 75, 75, 75, 24, 90, 60, 150, 140, 90];   // A〜K
+var DASH_W = [150, 75, 75, 75, 75, 24, 90, 60, 140, 130, 130];   // A〜K
 
 function writeDashboard_(ctx, lists, periods, checks) {
   var sh = outputSheet_('dash');
@@ -1422,8 +1526,10 @@ function writeDashboard_(ctx, lists, periods, checks) {
     { col: 4, span: 2, label: '今月の離脱', value: k.exitThisMonth, sub: '先月 ' + k.exitLastMonth + '人' },
     { col: 7, span: 2, label: '今週の導入', value: k.introThisWeek, sub: '先週 ' + k.introLastWeek + '人' },
     { col: 9, span: 1, label: '累計（登録者）', value: k.total, sub: 'うち離脱 ' + k.totalExit + '人' },
-    { col: 10, span: 2, label: '1年継続率', value: k.ret1y.rate === null ? '—' : k.ret1y.rate, format: '0%',
-      sub: k.ret1y.den ? '導入から1年たった ' + k.ret1y.den + '人中 ' + k.ret1y.num + '人' : '1年たった人がまだいません' }
+    { col: 10, span: 1, label: '対象（○）', value: k.marked,
+      sub: k.markedNoPeriod ? 'うち期間なし ' + k.markedNoPeriod + '人' : (k.marked ? '全員に期間あり' : '') },
+    { col: 11, span: 1, label: '1年継続率', value: k.ret1y.rate === null ? '—' : k.ret1y.rate, format: '0%',
+      sub: k.ret1y.den ? k.ret1y.den + '人中 ' + k.ret1y.num + '人' : '対象者なし' }
   ]);
 
   var rowL = boxTable_(sh, 8, 1, '機器別（いま）', ['機器', '利用中', '今月の導入', '離脱', '累計'], st.byDevice,
@@ -1618,27 +1724,31 @@ function group_(sh, row, col, width, text) {
 // ============================================================
 // 書き出し：機器別一覧
 // ============================================================
-var DEVICE_SEL = 'C3:E3';
+var DEVICE_SEL = 'C3:F3';   // 機器・業者・状態・対象 を選ぶ黄色のセル
+var MARK_ONLY = TARGET_MARK + 'のみ';
+var MARK_NONE = TARGET_MARK + 'なし';
 
+/** 機器別一覧：機器（＝クラウド）ごとに、レポートを出す人と期間を確かめる作業用の一覧 */
 function writeDeviceList_(ctx, lists) {
   var sh = outputSheet_('device');
   var prev = sh.getLastRow() >= 3 ? sh.getRange(DEVICE_SEL).getDisplayValues()[0] : [];
   var devOpts = [ALL_OPTION].concat(lists.devices);
   var supOpts = [ALL_OPTION].concat(lists.suppliers);
   var stOpts = [STATUS_ACTIVE, STATUS_EXIT, ALL_OPTION];
-  var selDev = devOpts.indexOf(prev[0]) >= 0 ? prev[0] : ALL_OPTION;
-  var selSup = supOpts.indexOf(prev[1]) >= 0 ? prev[1] : ALL_OPTION;
-  var selSt = stOpts.indexOf(prev[2]) >= 0 ? prev[2] : STATUS_ACTIVE;
+  var mkOpts = [ALL_OPTION, MARK_ONLY, MARK_NONE];
+  var pick = function (opts, v, def) { return opts.indexOf(v) >= 0 ? v : def; };
+  var selDev = pick(devOpts, prev[0], ALL_OPTION);
+  var selSup = pick(supOpts, prev[1], ALL_OPTION);
+  var selSt = pick(stOpts, prev[2], STATUS_ACTIVE);
+  var selMk = pick(mkOpts, prev[3], ALL_OPTION);
 
   resetSheet_(sh);
   sh.setHiddenGridlines(true);
-  var widths = [60, 130, 150, 140, 95, 85, 105, 105, 60, 260];
-  widths.forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [60, 130, 150, 140, 70, 70, 105, 105, 95, 85, 240].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
   sh.getRange('A1').setValue('機器別一覧').setFontSize(15).setFontWeight('bold').setFontColor(C_TITLE);
-  sh.getRange('C2:E2').setValues([['機器', '業者', '状態']]).setFontSize(9).setFontWeight('bold')
+  sh.getRange('C2:F2').setValues([['機器', '業者', '状態', '対象']]).setFontSize(9).setFontWeight('bold')
     .setFontColor(C_SUB);
-  var sel = sh.getRange(DEVICE_SEL);
-  sel.setValues([[selDev, selSup, selSt]]).setBackground(C_INPUT).setFontWeight('bold')
+  sh.getRange(DEVICE_SEL).setValues([[selDev, selSup, selSt, selMk]]).setBackground(C_INPUT).setFontWeight('bold')
     .setBorder(true, true, true, true, true, null, '#bf9000', SpreadsheetApp.BorderStyle.SOLID);
   var rule = function (opts) {
     return SpreadsheetApp.newDataValidation().requireValueInList(opts, true).setAllowInvalid(false).build();
@@ -1646,56 +1756,58 @@ function writeDeviceList_(ctx, lists) {
   sh.getRange('C3').setDataValidation(rule(devOpts));
   sh.getRange('D3').setDataValidation(rule(supOpts));
   sh.getRange('E3').setDataValidation(rule(stOpts));
-  sh.getRange('F2').setValue('← 黄色のセルを選ぶと切り替わります').setFontSize(9).setFontColor(C_SUB);
+  sh.getRange('F3').setDataValidation(rule(mkOpts));
+  sh.getRange('G2').setValue('← 黄色のセルを選ぶと切り替わります').setFontSize(9).setFontColor(C_SUB);
   var info = selDev !== ALL_OPTION ? ctx.master.info[selDev] : null;
-  sh.getRange('F3').setValue(info && info.cloud ? 'クラウド：' + info.cloud : '').setFontColor(C_SUB);
+  sh.getRange('G3').setValue(info && info.cloud ? 'クラウド：' + info.cloud : '').setFontColor(C_SUB);
 
-  var match = function (p) {
+  var pool = ctx.patients.filter(function (p) {
     return (selDev === ALL_OPTION || devOf_(p) === selDev) && (selSup === ALL_OPTION || supOf_(p) === selSup);
-  };
-  var pool = ctx.patients.filter(match);
+  });
   var t = ymd_(ctx.today);
   var mStart = dn_(t.y, t.m, 1);
-  var nActive = pool.filter(function (p) { return p.status === STATUS_ACTIVE; }).length;
-  var nExit = pool.filter(function (p) { return p.status === STATUS_EXIT; }).length;
-  var nNew = pool.filter(function (p) { return p.intro !== null && p.intro >= mStart && p.intro <= ctx.today; }).length;
-  sh.getRange('A4').setValue('利用中 ' + nActive + '人／離脱 ' + nExit + '人／累計 ' + pool.length + '人／今月の導入 ' +
-    nNew + '人　　（更新：' + ctx.stamp + '）').setFontWeight('bold').setFontColor(C_TITLE);
+  var count = function (fn) { return pool.filter(fn).length; };
+  sh.getRange('A4').setValue('利用中 ' + count(function (p) { return p.status === STATUS_ACTIVE; }) + '人／離脱 ' +
+    count(function (p) { return p.status === STATUS_EXIT; }) + '人／累計 ' + pool.length + '人／今月の導入 ' +
+    count(function (p) { return p.intro !== null && p.intro >= mStart && p.intro <= ctx.today; }) + '人／対象（○） ' +
+    count(function (p) { return p.target; }) + '人　　（更新：' + ctx.stamp + '）').setFontWeight('bold').setFontColor(C_TITLE);
 
-  var list = pool.filter(function (p) { return selSt === ALL_OPTION || p.status === selSt; });
+  var list = pool.filter(function (p) {
+    return (selSt === ALL_OPTION || p.status === selSt) &&
+      (selMk === ALL_OPTION || (selMk === MARK_ONLY ? p.target : !p.target));
+  });
   var order = function (arr, v) { var i = arr.indexOf(v); return i < 0 ? 999 : i; };
   list.sort(function (a, b) {
     return (order(lists.devices, devOf_(a)) - order(lists.devices, devOf_(b))) ||
       (order(lists.suppliers, supOf_(a)) - order(lists.suppliers, supOf_(b))) || compareId_(a, b);
   });
-  var head = ['ID', '名前', '機器', '業者', '導入日', '利用期間', 'レポート開始日', 'レポート終了日', '状態', '備考'];
+  var head = ['ID', '名前', '機器', '業者', '状態', '対象', 'レポート開始日', 'レポート終了日', '導入日', '利用期間', '備考'];
   ensureSize_(sh, list.length + 10, head.length);
   var rows = list.map(function (p) {
     var until = p.exit !== null && p.exit <= ctx.today ? p.exit : ctx.today;
-    return [p.id, p.name, p.device, p.supplier, p.raw.intro,
-            durationText_(p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : null),
-            p.raw.repStart, p.raw.repEnd, p.status, p.note];
+    return [p.id, p.name, p.device, p.supplier, p.status, p.target ? TARGET_MARK : '', p.raw.repStart, p.raw.repEnd,
+            p.raw.intro, durationText_(p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : null), p.note];
   });
   var end = table_(sh, 5, 1, head, rows, {
-    formats: [null, null, null, null, 'yyyy/mm/dd', null, 'yyyy/mm/dd', 'yyyy/mm/dd'], center: [0, 8],
+    formats: [null, null, null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd'], center: [0, 4, 5],
     empty: '該当する人はいません' });
   if (rows.length) {
     var bg = list.map(function (p) {
       var line = [];
-      for (var i = 0; i < head.length; i++) line.push(null);
-      if (p.status === STATUS_EXIT) {
-        for (var j = 0; j < head.length; j++) line[j] = C_EXIT_BG;
-      } else if (p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart) {
+      for (var i = 0; i < head.length; i++) line.push(p.status === STATUS_EXIT ? C_EXIT_BG : null);
+      if (p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart) {
         line[6] = C_ALERT;
         line[7] = C_ALERT;
-      } else if (p.repStart === null || p.repEnd === null) {
+      } else if (p.target && (p.repStart === null || p.repEnd === null)) {
         line[6] = C_TODO;
         line[7] = C_TODO;
       }
+      if (p.target && p.status === STATUS_EXIT) line[5] = C_WARN;
       return line;
     });
     sh.getRange(6, 1, rows.length, head.length).setBackgrounds(bg);
-    sh.getRange(end, 1).setValue('水色：レポート期間がまだ入っていない人　赤：終了日が開始日より前')
+    sh.getRange(6, 6, rows.length, 1).setFontWeight('bold');
+    sh.getRange(end, 1).setValue('水色：対象（○）なのにレポート期間が空欄　赤：終了日が開始日より前　オレンジ：離脱しているのに○')
       .setFontSize(9).setFontColor(C_SUB);
   }
   sh.setFrozenRows(5);
@@ -1800,7 +1912,7 @@ function writeAnonSheet_(ctx) {
   var sh = outputSheet_('anon');
   resetSheet_(sh);
   var head = ['ID', '機器', '業者', 'クラウド', '導入日', '離脱日', '状態', '離脱理由', '利用月数',
-              'レポート開始日', 'レポート終了日'];
+              'レポート開始日', 'レポート終了日', '対象'];
   sh.getRange('A1').setValue('匿名データ（名前・備考を除いた一覧）').setFontSize(14).setFontWeight('bold')
     .setFontColor(C_TITLE);
   sh.getRange('A2').setValue('外部での分析やAIに渡すときはこのタブを使ってください。集計の更新のたびに作り直します。　更新：' +
@@ -1810,14 +1922,14 @@ function writeAnonSheet_(ctx) {
     var until = p.exit !== null && p.exit <= ctx.today ? p.exit : ctx.today;
     var months = p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : '';
     return [p.id, p.device, p.supplier, info ? info.cloud : '', p.raw.intro, p.raw.exit, p.status, p.reason,
-            months === null ? '' : months, p.raw.repStart, p.raw.repEnd];
+            months === null ? '' : months, p.raw.repStart, p.raw.repEnd, p.target ? TARGET_MARK : ''];
   });
   ensureSize_(sh, rows.length + 5, head.length);
   table_(sh, 4, 1, head, rows, {
     formats: [null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', null, null, '#,##0', 'yyyy/mm/dd', 'yyyy/mm/dd'],
-    empty: '患者がまだいません' });
+    center: [11], empty: '患者がまだいません' });
   sh.setFrozenRows(4);
-  [60, 150, 140, 130, 95, 95, 60, 120, 70, 105, 105].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [60, 150, 140, 130, 95, 95, 60, 120, 70, 105, 105, 50].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
 }
 
 
@@ -1838,17 +1950,19 @@ function writeGuide_() {
     ['li', '新しい患者さん：メニュー［CPAP管理］→［新規登録フォーム］で登録するか、' + SH.ledger + 'のいちばん下の行に直接入力します。'],
     ['li', '名前を入れると、ID（数字のIDの場合）と状態「利用中」が自動で入ります。'],
     ['li', '機器を選ぶと、業者が1社だけの機器は業者も自動で入ります。業者が複数ある機器（AirSense10 など）は業者を選んでください。'],
-    ['li', 'やめたとき：離脱日を入れると、状態が自動で「離脱」になり、行がグレーになります。離脱理由も選んでください。'],
+    ['li', 'やめたとき：離脱日を入れると、状態が自動で「離脱」になり、対象の○が外れて、行がグレーになります。離脱理由も選んでください。'],
     ['li', '日付は「t」で今日、「y」で昨日。「20261001」「R8.10.1」「10/1」でも入ります。セルをダブルクリックするとカレンダーが出ます。'],
     ['li', '一度やめて再開した人は、新しい行で登録し、備考に前のIDを書いてください（導入数・離脱数が正しく数えられます）。'],
     ['li', 'やめた人の行は削除せずに残してください（過去の集計が変わってしまうため）。'],
-    ['h2', 'レポート期間'],
-    ['li', '「レポート開始日」「レポート終了日」に、レポートを出す期間を入れます。'],
+    ['h2', 'レポートを出すとき（対象・レポート期間）'],
+    ['li', 'レポートを出す人の「対象」に「○」を入れ、「レポート開始日」「レポート終了日」に期間を入れます。' +
+           '対象の欄は何を入れても○になります（×・0 は空欄に）。新規登録した人は最初から○です。'],
     ['li', 'まとめて入れるとき：' + SH.ledger + 'で行を選び（見出しの▼で機器などを絞り込んでから選ぶと便利）、' +
-           'メニュー［CPAP管理］→［レポート期間をまとめて入力］。'],
-    ['li', '「先月」「今月」「前回の続き（前回の終了日の翌日から）」「日付を指定」から選べます。' +
-           '離脱した人と、絞り込みで隠れている行には入りません。'],
-    ['li', '「' + SH.device + '」タブで、機器（クラウド）ごとの利用者とレポート期間を一覧できます。期間が空欄の人は水色です。'],
+           'メニュー［CPAP管理］→［レポート（期間・対象○）をまとめて入力］。'],
+    ['li', '期間は「先月」「今月」「前回の続き（前回の終了日の翌日から）」「日付を指定」から選べ、同時に○も付けられます。' +
+           '○だけを付ける・外すこともできます。離脱した人と、絞り込みで隠れている行には入りません。'],
+    ['li', '「' + SH.device + '」タブで「対象」を「○のみ」にすると、機器（クラウド）ごとに、レポートを出す人と期間の一覧になります。'],
+    ['li', 'レポートを出し終わったら、メニュー［CPAP管理］→［対象（○）をすべて消す］で○をまとめて空欄に戻します（期間は残ります）。'],
     ['h2', '自動で作られるタブ'],
     ['tbl', SH.dash, 'いまの利用者数、今月・今週の導入と離脱、機器別・業者別の人数、直近の導入・離脱、要確認（入力もれ）、グラフ'],
     ['tbl', SH.month + '／' + SH.week + '／' + SH.year, '期間ごとの導入数・離脱数・純増・期末の利用者数と、機器別・業者別の導入数（新しい順）'],
@@ -1862,7 +1976,8 @@ function writeGuide_() {
     ['li', '「月額レンタル料（税込）」と「初月無料（あり／なし）」を入れると、「' + SH.cost + '」タブで金額の目安が出ます。'],
     ['h2', '色の意味（' + SH.ledger + '）'],
     ['color', C_ALERT, '赤：直してほしいもの（入力もれ・IDの重複・日付として読めない・日付の前後が逆）'],
-    ['color', C_WARN, 'オレンジ：確認してほしいもの（同じ名前が複数・「離脱」なのに離脱日や離脱理由が空欄）'],
+    ['color', C_WARN, 'オレンジ：確認してほしいもの（同じ名前が複数・「離脱」なのに離脱日や離脱理由が空欄、または○が付いている）'],
+    ['color', C_TODO, '水色：対象（○）なのにレポート期間が入っていない'],
     ['color', C_EXIT_BG, 'グレー：離脱した人'],
     ['h2', '注意'],
     ['li', '1行目の見出しの名前と、タブの名前は変えないでください。右に列を足すのは大丈夫です。'],
@@ -1982,7 +2097,7 @@ function importOldData() {
     var msg = '「' + plan.oldSheet.getName() + '」から ' + plan.rows.length + '人を「' + SH.ledger + '」に取り込みます。';
     if (plan.skipped) msg += '\n（すでに' + SH.ledger + 'にいる ' + plan.skipped + '人は飛ばします）';
     if (plan.missingHeads.length) msg += '\n※ 旧シートに見つからない列：' + plan.missingHeads.join('・');
-    msg += '\n\n最終通院日・次回予定日・対象などの列は新しい表にないため取り込みません。' +
+    msg += '\n\n最終通院日・次回予定日・クラウド区分などの列は新しい表にないため取り込みません（対象の○は取り込みます）。' +
       '\n「' + plan.oldSheet.getName() + '」シートは変更せず、そのまま残します。\n\n実行しますか？';
     if (ui.alert('旧データの取り込み', msg, ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
     var res = runImport_(plan);
@@ -2037,7 +2152,7 @@ function planImport_() {
       name: name, device: trim_(get('device')), supplier: trim_(String(get('supplier')).split('|')[0]),
       repStart: importDate_(get('repStart'), today), repEnd: importDate_(get('repEnd'), today),
       intro: importDate_(get('intro'), today), exit: importDate_(get('exit'), today),
-      note: note, status: '', reason: trim_(get('reason'))
+      target: targetMark_(get('target')), note: note, status: '', reason: trim_(get('reason'))
     };
     var exitDn = dnOf_(rec.exit, today);
     if (exitDn !== null) rec.status = exitDn <= today ? STATUS_EXIT : STATUS_ACTIVE;
@@ -2045,6 +2160,7 @@ function planImport_() {
     if (rec.status === STATUS_EXIT && !rec.reason) {
       rec.reason = (/移管/.test(oldStatus) || /移管/.test(note)) ? REASON_MOVED : REASON_UNKNOWN;
     }
+    if (rec.status === STATUS_EXIT) rec.target = '';
     plan.rows.push(rec);
   }
   return plan;
@@ -2223,7 +2339,7 @@ function hideOldTabs() {
 // ============================================================
 // 外部連携用（旧バージョンと同じ形で返す）
 // ============================================================
-/** 患者の一覧を配列で返す。target は「利用中で、レポート期間が入っている人」が 'TRUE'。 */
+/** 患者の一覧を配列で返す（旧バージョンと同じ形）。target は対象に○が付いている人が 'TRUE'。 */
 function getPatientsForBatch() {
   var ctx = loadContext_();
   var ds = function (dn) { return dn === null ? '' : fmtDn_(dn); };
@@ -2232,7 +2348,7 @@ function getPatientsForBatch() {
     return {
       id: p.id, name: p.name, kind: p.device, supplier: p.supplier, cloud: info ? info.cloud : '',
       status: p.status,
-      target: p.status === STATUS_ACTIVE && p.repStart !== null && p.repEnd !== null ? 'TRUE' : 'FALSE',
+      target: p.target ? 'TRUE' : 'FALSE',
       start_date: ds(p.repStart), end_date: ds(p.repEnd), intro_date: ds(p.intro), last_visit: '',
       exit_date: ds(p.exit), next_due: '', days_to_next: '', months_no_visit: '', other: p.note, reason: p.reason
     };
@@ -2307,11 +2423,10 @@ function adoptOrCreate_(key, looksOk) {
 /** 自動で作るタブ（中身は毎回作り直す）。直接編集しないよう警告だけ出す保護を付ける */
 function outputSheet_(key) {
   var sh = adoptOrCreate_(key, function () { return false; });
-  if (!sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) {
-    var p = sh.protect().setDescription('CPAP管理：自動で作るタブ（書き込んでも次の更新で上書きされます）')
-      .setWarningOnly(true);
-    if (key === 'device') p.setUnprotectedRanges([sh.getRange(DEVICE_SEL)]);
-  }
+  var ps = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+  var p = ps.length ? ps[0] : sh.protect().setDescription('CPAP管理：自動で作るタブ（書き込んでも次の更新で上書きされます）')
+    .setWarningOnly(true);
+  if (key === 'device') p.setUnprotectedRanges([sh.getRange(DEVICE_SEL)]);
   return sh;
 }
 
@@ -2472,6 +2587,15 @@ function initTz_() {
 function trim_(v) {
   if (v === null || v === undefined) return '';
   return String(v).replace(/^[\s　]+|[\s　]+$/g, '');
+}
+
+/** 対象の欄の値を「○」か空欄にそろえる（×・x・0・FALSE・なし などは空欄） */
+function targetMark_(v) {
+  if (v === true) return TARGET_MARK;
+  if (v === false || v === null || v === undefined) return '';
+  var s = toHalfWidth_(trim_(v));
+  if (!s || /^(x|×|✕|✖|-|ー|−|0|false|no|なし|無|いいえ)$/i.test(s)) return '';
+  return TARGET_MARK;
 }
 
 function nameKey_(v) {

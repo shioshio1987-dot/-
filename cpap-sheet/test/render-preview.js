@@ -48,18 +48,20 @@ for (let i = 0; i < 260; i++) {
   }
   const rep = exit === null && r() < 0.7;
   const d = ms => (ms === null ? '' : t.cellDate(...ymd(ms)));
+  const mark = exit === null && r() < 0.6 ? '○' : '';
   rows.push([i + 1, FAMILY[Math.floor(r() * FAMILY.length)] + ' ' + GIVEN[Math.floor(r() * GIVEN.length)], c[0], c[1],
-    rep ? d(Date.UTC(2026, 8, 1)) : '', rep ? d(Date.UTC(2026, 8, 30)) : '', d(intro), d(exit), r() < 0.08 ? '夜間の装着が不安定' : '', '', reason]);
+    rep ? d(Date.UTC(2026, 8, 1)) : '', rep ? d(Date.UTC(2026, 8, 30)) : '', mark, d(intro), d(exit),
+    r() < 0.08 ? '夜間の装着が不安定' : '', '', reason]);
 }
-rows.sort((a, b) => a[6] - b[6]).forEach((row, i) => { row[0] = i + 1; });
+rows.sort((a, b) => a[7] - b[7]).forEach((row, i) => { row[0] = i + 1; });
 t.grow('患者一覧', rows.length + 1);
-t.sheet('患者一覧').getRange(2, 1, rows.length, 11).setValues(rows);
+t.sheet('患者一覧').getRange(2, 1, rows.length, 12).setValues(rows);
 // 確認用に、わざと入力もれ・矛盾をいくつか入れる
 const sh = t.sheet('患者一覧');
 sh.getRange('D30').setValue('');
 sh.getRange('A41').setValue(39);
-sh.getRange('H52').setValue(t.cellDate(2023, 1, 5));
-sh.getRange('K60').setValue('');
+sh.getRange('I52').setValue(t.cellDate(2023, 1, 5));
+sh.getRange('L60').setValue('');
 // マスタに架空の料金
 const m = t.sheet('マスタ');
 const mv = m.getRange(5, 1, 9, 7).getValues();
@@ -70,6 +72,7 @@ gs.refreshNow();
 gs.registerPatient({ name: '新規 登録', device: 'AirMini', supplier: 'フクダライフテック', intro: '2026-10-01', repStart: '', repEnd: '' });
 gs.refreshNow();
 t.typeIn('機器別一覧', 'C3', 'AirSense10');
+t.typeIn('機器別一覧', 'F3', '○のみ');
 
 // ---------- 条件付き書式の式を計算する ----------
 function cfEval(formula, sheet, row) {

@@ -368,6 +368,7 @@ class Sheet {
     for (const [k, cell] of this._cells) { const [r, c] = k.split(',').map(Number); moved.set(this._key(r > after ? r + n : r, c), cell); }
     this._cells = moved; this._maxRows += n; return this._proxy;
   }
+  insertColumnAfter(after) { return this.insertColumnsAfter(after, 1); }
   insertColumnsAfter(after, n) {
     if (after < 1 || after > this._maxCols || n < 1) throw new Error('[mock] insertColumnsAfter の引数が不正');
     const moved = new Map();

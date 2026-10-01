@@ -14,6 +14,7 @@ if (!scenario) {
   const runs = [
     ['Asia/Tokyo', 'main', ''],
     ['Asia/Tokyo', 'import', ''],
+    ['Asia/Tokyo', 'upgrade', ''],
     ['Asia/Tokyo', 'collision', ''],
     ['Asia/Tokyo', 'big', ''],
     ['America/New_York', 'tz', 'Asia/Tokyo'],          // スクリプトは NY、シートは東京
@@ -98,10 +99,11 @@ function makePatients(n, seed) {
       if (exit !== null && r() < 0.1) reason = '';
     }
     const rep = r() < 0.6 && (exit === null || exit > TODAY);
+    const target = (exit === null || exit > TODAY) && r() < 0.5;
     out.push({
       id: i + 1, name: `患者${String(i + 1).padStart(4, '0')}`, device: c[0], supplier: c[1], price: c[2], free: c[3],
       intro, exit, reason, repStart: rep ? Date.UTC(2026, 8, 1) : null, repEnd: rep ? Date.UTC(2026, 8, 30) : null,
-      note: r() < 0.1 ? 'メモあり' : ''
+      target, note: r() < 0.1 ? 'メモあり' : ''
     });
   }
   return out;
@@ -110,10 +112,10 @@ function makePatients(n, seed) {
 /** 患者一覧にまとめて書き込む（貼り付けと同じ。状態は空のまま → 集計のときに自動で入る） */
 function writeLedger(t, patients, startRow) {
   const d = ms => (ms === null ? '' : t.cellDate(...ymd(ms)));
-  const rows = patients.map(p => [p.id, p.name, p.device, p.supplier, d(p.repStart), d(p.repEnd), d(p.intro), d(p.exit),
-    p.note, '', p.reason]);
+  const rows = patients.map(p => [p.id, p.name, p.device, p.supplier, d(p.repStart), d(p.repEnd), p.target ? '○' : '',
+    d(p.intro), d(p.exit), p.note, '', p.reason]);
   t.grow('患者一覧', (startRow || 2) + rows.length - 1);
-  t.sheet('患者一覧').getRange(startRow || 2, 1, rows.length, 11).setValues(rows);
+  t.sheet('患者一覧').getRange(startRow || 2, 1, rows.length, 12).setValues(rows);
 }
 
 // ---------- 期待値（Code.gs とは別に計算） ----------
@@ -198,8 +200,8 @@ function scenarioMain() {
     const names = t.ss.getSheets().map(s => s.getName());
     assert.deepStrictEqual(names.slice(0, 10),
       ['患者一覧', 'ダッシュボード', '月別', '週別', '年別', '機器別一覧', '離脱分析', '台数・費用', 'マスタ', '使い方']);
-    assert.deepStrictEqual(t.display('患者一覧', 'A1:K1')[0],
-      ['ID', '名前', '機器', '業者', 'レポート開始日', 'レポート終了日', '導入日', '離脱日', '備考', '状態', '離脱理由']);
+    assert.deepStrictEqual(t.display('患者一覧', 'A1:L1')[0],
+      ['ID', '名前', '機器', '業者', 'レポート開始日', 'レポート終了日', '対象', '導入日', '離脱日', '備考', '状態', '離脱理由']);
     assert.strictEqual(t.state.triggers.length, 1);
     assert.strictEqual(t.state.triggers[0].getHandlerFunction(), 'autoRefresh');
     const last = t.state.alerts[t.state.alerts.length - 1];
@@ -220,8 +222,9 @@ function scenarioMain() {
     const dev = sh.getRange('C2').getDataValidation();
     assert.ok(dev.crit.list.includes('SBOX（加湿器付）'));
     assert.strictEqual(sh.getRange('D2').getDataValidation().crit.list.length, 4);
-    assert.deepStrictEqual(Array.from(sh.getRange('J2').getDataValidation().crit.list), ['利用中', '離脱']);
-    assert.strictEqual(sh.getRange('G500').getDataValidation().crit.type, 'date');
+    assert.deepStrictEqual(Array.from(sh.getRange('K2').getDataValidation().crit.list), ['利用中', '離脱']);
+    assert.deepStrictEqual(Array.from(sh.getRange('G2').getDataValidation().crit.list), ['○']);
+    assert.strictEqual(sh.getRange('H500').getDataValidation().crit.type, 'date');
     assert.ok(sh.getConditionalFormatRules().length >= 12);
     assert.ok(sh.getFilter());
     assert.strictEqual(sh.getProtections('RANGE').length, 1);
@@ -231,7 +234,7 @@ function scenarioMain() {
 
   test('入力：名前を入れると ID=1 と 状態=利用中', () => {
     t.typeIn('患者一覧', 'B2', '山田 太郎');
-    assert.deepStrictEqual(t.values('患者一覧', 'A2:J2')[0].filter((x, i) => [0, 9].includes(i)), [1, '利用中']);
+    assert.deepStrictEqual(t.values('患者一覧', 'A2:K2')[0].filter((x, i) => [0, 10].includes(i)), [1, '利用中']);
   });
 
   test('入力：業者が1社だけの機器は業者が自動で入る／複数なら案内', () => {
@@ -257,34 +260,34 @@ function scenarioMain() {
       ['9/5', '2026/09/05'], ['H31.4.30', '2019/04/30']
     ];
     for (const [input, want] of cases) {
-      t.typeIn('患者一覧', 'G3', input);
-      const v = t.values('患者一覧', 'G3')[0][0];
+      t.typeIn('患者一覧', 'H3', input);
+      const v = t.values('患者一覧', 'H3')[0][0];
       assert.ok(v instanceof Date, input + ' が日付になっていない');
       assert.strictEqual(t.ymdOf(v), want, input);
       assert.ok(t.isMidnight(v), input + ' が0時になっていない');
     }
-    t.typeIn('患者一覧', 'G3', 'あした');
-    assert.strictEqual(t.values('患者一覧', 'G3')[0][0], 'あした');
+    t.typeIn('患者一覧', 'H3', 'あした');
+    assert.strictEqual(t.values('患者一覧', 'H3')[0][0], 'あした');
     assert.ok(t.lastToast().includes('日付として読めません'));
-    t.typeIn('患者一覧', 'G3', '2026/9/1');
-    t.typeIn('患者一覧', 'G2', '2026/8/20');
+    t.typeIn('患者一覧', 'H3', '2026/9/1');
+    t.typeIn('患者一覧', 'H2', '2026/8/20');
   });
 
   test('入力：離脱日 → 離脱／消す → 利用中／未来の日付 → 利用中のまま', () => {
-    t.typeIn('患者一覧', 'H2', 'y');
-    assert.strictEqual(t.values('患者一覧', 'J2')[0][0], '離脱');
+    t.typeIn('患者一覧', 'I2', 'y');
+    assert.strictEqual(t.values('患者一覧', 'K2')[0][0], '離脱');
     assert.ok(t.lastToast().includes('離脱理由も選んでください'));
-    t.typeIn('患者一覧', 'H2', '');
-    assert.strictEqual(t.values('患者一覧', 'J2')[0][0], '利用中');
-    t.typeIn('患者一覧', 'H2', '2026/10/20');
-    assert.strictEqual(t.values('患者一覧', 'J2')[0][0], '利用中');
+    t.typeIn('患者一覧', 'I2', '');
+    assert.strictEqual(t.values('患者一覧', 'K2')[0][0], '利用中');
+    t.typeIn('患者一覧', 'I2', '2026/10/20');
+    assert.strictEqual(t.values('患者一覧', 'K2')[0][0], '利用中');
     assert.ok(t.lastToast().includes('未来の日付'));
-    t.typeIn('患者一覧', 'H2', '2026/9/28');
-    assert.strictEqual(t.values('患者一覧', 'J2')[0][0], '離脱');
-    t.typeIn('患者一覧', 'J2', '利用中');
-    assert.strictEqual(t.values('患者一覧', 'J2')[0][0], '離脱', '離脱日があるので戻す');
+    t.typeIn('患者一覧', 'I2', '2026/9/28');
+    assert.strictEqual(t.values('患者一覧', 'K2')[0][0], '離脱');
+    t.typeIn('患者一覧', 'K2', '利用中');
+    assert.strictEqual(t.values('患者一覧', 'K2')[0][0], '離脱', '離脱日があるので戻す');
     assert.ok(t.lastToast().includes('離脱日を消してください'));
-    t.typeIn('患者一覧', 'K2', '自己中断');
+    t.typeIn('患者一覧', 'L2', '自己中断');
   });
 
   test('入力：レポート期間の前後が逆なら案内', () => {
@@ -297,10 +300,10 @@ function scenarioMain() {
 
   test('入力：複数行の貼り付けでもIDと状態が入る', () => {
     t.paste('患者一覧', 4, 2, [['鈴木 一郎', 'DreamStation'], ['高橋 次郎', 'SBOX']]);
-    const v = t.values('患者一覧', 'A4:J5');
+    const v = t.values('患者一覧', 'A4:K5');
     assert.deepStrictEqual([v[0][0], v[1][0]], [3, 4]);
     assert.deepStrictEqual([v[0][3], v[1][3]], ['フィリップス', 'RISEF']);
-    assert.deepStrictEqual([v[0][9], v[1][9]], ['利用中', '利用中']);
+    assert.deepStrictEqual([v[0][10], v[1][10]], ['利用中', '利用中']);
   });
 
   test('サイドバー：初期データ（次のID・先月・今月）', () => {
@@ -317,10 +320,10 @@ function scenarioMain() {
     const r = gs.registerPatient(base);
     assert.strictEqual(r.status, 'ok');
     assert.strictEqual(r.nextId, 6);
-    const row = t.values('患者一覧', 'A6:K6')[0];
-    assert.deepStrictEqual([row[0], row[1], row[2], row[3], t.ymdOf(row[6]), row[8], row[9]],
-      [5, '伊藤 三郎', 'AirMini', 'RISEF', '2026/09/10', 'テスト', '利用中']);
-    assert.ok(t.isMidnight(row[6]));
+    const row = t.values('患者一覧', 'A6:L6')[0];
+    assert.deepStrictEqual([row[0], row[1], row[2], row[3], row[6], t.ymdOf(row[7]), row[9], row[10]],
+      [5, '伊藤 三郎', 'AirMini', 'RISEF', '○', '2026/09/10', 'テスト', '利用中'], '対象は最初から○');
+    assert.ok(t.isMidnight(row[7]));
     assert.strictEqual(gs.registerPatient(Object.assign({}, base, { name: '伊藤　三郎' })).status, 'dup');
     assert.strictEqual(gs.registerPatient(Object.assign({}, base, { force: true })).status, 'ok');
     assert.throws(() => gs.registerPatient(Object.assign({}, base, { name: '別人', id: '5' })), /すでに使われています/);
@@ -361,15 +364,62 @@ function scenarioMain() {
     assert.throws(() => gs.getSelectionInfo(), /患者一覧/);
   });
 
+  test('対象（○）：何を入れても○、×・x・0 は空欄', () => {
+    t.typeIn('患者一覧', 'B9', '対象 テスト');
+    for (const [input, want] of [['あ', '○'], ['x', ''], ['〇', '○'], ['×', ''], ['0', ''], ['1', '○'], ['', ''], ['○', '○']]) {
+      t.typeIn('患者一覧', 'G9', input);
+      assert.strictEqual(t.values('患者一覧', 'G9')[0][0], want, JSON.stringify(input));
+    }
+  });
+
+  test('対象（○）：離脱日を入れると○が外れる（旧バージョンと同じ）', () => {
+    t.typeIn('患者一覧', 'H9', '2026/9/1');
+    t.typeIn('患者一覧', 'I9', 'y');
+    assert.strictEqual(t.values('患者一覧', 'G9')[0][0], '');
+    assert.ok(t.lastToast().includes('対象（○）を外しました'), t.lastToast());
+  });
+
+  test('対象（○）：選んだ行に付ける・外す／期間と一緒に付ける', () => {
+    t.select('患者一覧', ['A3:A4']);
+    gs.setTargetMarks({ mode: 'off' });
+    assert.deepStrictEqual(t.values('患者一覧', 'G3:G4'), [[''], ['']]);
+    gs.setTargetMarks({ mode: 'on' });
+    assert.deepStrictEqual(t.values('患者一覧', 'G3:G4'), [['○'], ['○']]);
+    t.select('患者一覧', ['A9']);
+    assert.throws(() => gs.setTargetMarks({ mode: 'on' }), /対象の行がありません/, '離脱した人には付けない');
+    t.select('患者一覧', ['A3:A4']);
+    gs.setTargetMarks({ mode: 'off' });
+    const r = gs.applyReportPeriod({ mode: 'fixed', start: '2026-09-01', end: '2026-09-30', mark: true });
+    assert.ok(r.message.includes('○も付けました'), r.message);
+    assert.deepStrictEqual(t.values('患者一覧', 'G3:G4'), [['○'], ['○']]);
+    const info = gs.getSelectionInfo();
+    assert.ok(info.message.includes('対象（○）が付いている人：2人'), info.message);
+  });
+
+  test('対象（○）をすべて消す（メニュー・人数を見せて確認・期間は残す）', () => {
+    const n = gs.clearAllTargets({}).count;
+    assert.ok(n >= 2, String(n));
+    t.state.responses.push('CANCEL');
+    gs.clearTargetMarks();
+    assert.strictEqual(gs.clearAllTargets({}).count, n, 'キャンセルなら消さない');
+    gs.clearTargetMarks();
+    const a = t.state.alerts[t.state.alerts.length - 1];
+    assert.ok(a.prompt.includes('いま ' + n + '人に「○」'), a.prompt);
+    assert.strictEqual(gs.clearAllTargets({}).count, 0);
+    assert.deepStrictEqual(t.display('患者一覧', 'E3:F3'), [['2026/09/01', '2026/09/30']], '期間は残る');
+    gs.clearTargetMarks();
+    assert.ok(t.state.alerts[t.state.alerts.length - 1].prompt.includes('付いている人はいません'));
+  });
+
   // ---- まとまったデータで集計を確かめる ----
   const patients = makePatients(400, 7);
   test('集計：400人を貼り付けて［集計を今すぐ更新］', () => {
     const sh = t.sheet('患者一覧');
-    sh.getRange(2, 1, sh.getLastRow() - 1, 11).clearContent();
+    sh.getRange(2, 1, sh.getLastRow() - 1, 12).clearContent();
     writeLedger(t, patients);
     gs.refreshNow();
     assert.ok(t.lastToast().includes('400人'), t.lastToast());
-    const st = t.values('患者一覧', 'J2:J401').map(r => r[0]);
+    const st = t.values('患者一覧', 'K2:K401').map(r => r[0]);
     assert.deepStrictEqual(st, patients.map(status), '状態が離脱日に合わせて入る');
   });
 
@@ -383,9 +433,12 @@ function scenarioMain() {
     assert.strictEqual(v[3], patients.filter(p => p.exit !== null && p.exit >= mStart && p.exit <= TODAY).length, '今月の離脱');
     assert.strictEqual(v[6], patients.filter(p => p.intro >= wStart && p.intro <= TODAY).length, '今週の導入');
     assert.strictEqual(v[8], 400, '累計');
+    assert.strictEqual(v[9], patients.filter(p => p.target).length, '対象（○）');
+    const noPeriod = patients.filter(p => p.target && p.repStart === null).length;
+    assert.strictEqual(t.values('ダッシュボード', 'J6')[0][0], 'うち期間なし ' + noPeriod + '人');
     const elig = patients.filter(p => addMonths(p.intro, 12) <= TODAY);
     const kept = elig.filter(p => p.exit === null || p.exit >= addMonths(p.intro, 12));
-    assert.ok(Math.abs(v[9] - kept.length / elig.length) < 1e-9, '1年継続率');
+    assert.ok(Math.abs(v[10] - kept.length / elig.length) < 1e-9, '1年継続率');
     const sub = t.values('ダッシュボード', 'A6:K6')[0];
     assert.strictEqual(sub[0], '先月末 ' + patients.filter(p => isActiveAt(p, mStart - DAY)).length + '人');
     assert.strictEqual(sub[1], '先月 ' + patients.filter(p => p.intro >= lmStart && p.intro < mStart).length + '人');
@@ -483,21 +536,30 @@ function scenarioMain() {
   });
 
   test('機器別一覧：最初は「すべて・すべて・利用中」、選ぶと切り替わる', () => {
-    assert.deepStrictEqual(t.values('機器別一覧', 'C3:E3')[0], ['すべて', 'すべて', '利用中']);
+    assert.deepStrictEqual(t.values('機器別一覧', 'C3:F3')[0], ['すべて', 'すべて', '利用中', 'すべて']);
     const active = patients.filter(p => status(p) === '利用中');
     assert.strictEqual(t.sheet('機器別一覧').getLastRow() - 5, active.length + 1, '一覧＋注記1行');
     t.typeIn('機器別一覧', 'C3', 'AirSense10');
     t.typeIn('機器別一覧', 'D3', 'RISEF');
     const want = active.filter(p => p.device === 'AirSense10' && p.supplier === 'RISEF');
-    const rows = t.values('機器別一覧', 'A6:J' + (5 + want.length));
+    const rows = t.values('機器別一覧', 'A6:K' + (5 + want.length));
     assert.deepStrictEqual(rows.map(r => r[0]), want.map(p => p.id).sort((a, b) => a - b));
     assert.ok(rows.every(r => r[2] === 'AirSense10' && r[3] === 'RISEF'));
-    assert.strictEqual(t.values('機器別一覧', 'F3')[0][0], 'クラウド：AirView');
+    assert.strictEqual(t.values('機器別一覧', 'G3')[0][0], 'クラウド：AirView');
     gs.refreshNow();
-    assert.deepStrictEqual(t.values('機器別一覧', 'C3:E3')[0], ['AirSense10', 'RISEF', '利用中'], '更新しても選択は残る');
+    assert.deepStrictEqual(t.values('機器別一覧', 'C3:F3')[0], ['AirSense10', 'RISEF', '利用中', 'すべて'], '更新しても選択は残る');
     const p0 = want[0];
     const r0 = rows[0];
-    assert.strictEqual(r0[5], (() => { const m = monthsBetween(p0.intro, TODAY); return m < 12 ? m + 'ヶ月' : Math.floor(m / 12) + '年' + (m % 12 ? m % 12 + 'ヶ月' : ''); })());
+    assert.strictEqual(r0[9], (() => { const m = monthsBetween(p0.intro, TODAY); return m < 12 ? m + 'ヶ月' : Math.floor(m / 12) + '年' + (m % 12 ? m % 12 + 'ヶ月' : ''); })());
+    // 対象を「○のみ」にすると、レポートを出す人と期間の一覧になる
+    t.typeIn('機器別一覧', 'F3', '○のみ');
+    const marked = want.filter(p => p.target);
+    const mrows = marked.length ? t.values('機器別一覧', 'A6:K' + (5 + marked.length)) : [];
+    assert.deepStrictEqual(mrows.map(r => r[0]), marked.map(p => p.id).sort((a, b) => a - b));
+    assert.ok(mrows.every(r => r[5] === '○'));
+    const head = t.values('機器別一覧', 'A5:K5')[0];
+    assert.deepStrictEqual(head, ['ID', '名前', '機器', '業者', '状態', '対象', 'レポート開始日', 'レポート終了日', '導入日', '利用期間', '備考']);
+    t.typeIn('機器別一覧', 'F3', 'すべて');
     t.typeIn('機器別一覧', 'C3', 'すべて');
     t.typeIn('機器別一覧', 'D3', 'すべて');
   });
@@ -557,10 +619,12 @@ function scenarioMain() {
     const sh = t.sheet('患者一覧');
     sh.getRange('C10').setValue('');                       // 機器が空欄
     sh.getRange('A12').setValue(10);                       // IDの重複（11行目と同じ10番）
-    sh.getRange('H20').setValue(t.cellDate(2020, 1, 1));   // 離脱日が導入日より前
-    sh.getRange('G30').setValue('きのう?');                 // 日付として読めない
+    sh.getRange('I20').setValue(t.cellDate(2020, 1, 1));   // 離脱日が導入日より前
+    sh.getRange('H30').setValue('きのう?');                 // 日付として読めない
     sh.getRange('A402:D402').setValues([[999, '', 'AirMini', 'RISEF']]);   // 名前がない行
     sh.getRange('C40').setValue('NewDevice');              // マスタにない機器
+    const exRow = 2 + patients.findIndex(p => status(p) === '離脱');
+    sh.getRange('G' + exRow).setValue('○');               // 離脱しているのに○
     gs.refreshNow();
     const label = text => {
       const pos = t.find('ダッシュボード', text);
@@ -573,6 +637,12 @@ function scenarioMain() {
     assert.strictEqual(label('日付として読めない値がある'), '1件');
     assert.strictEqual(label('名前が空欄の行（ほかの欄には入力あり）'), '1件');
     assert.strictEqual(label('［マスタ］にない機器'), '1件');
+    const all = t.values('患者一覧', 'A2:L402').filter(r => r[1] !== '');
+    const noPeriod = all.filter(r => r[6] === '○' && (r[4] === '' || r[5] === '')).length;
+    const exitedMarked = all.filter(r => r[6] === '○' && r[10] === '離脱').length;
+    assert.ok(noPeriod > 0 && exitedMarked > 0);
+    assert.strictEqual(label('対象（○）なのにレポート期間が空欄'), noPeriod + '件');
+    assert.strictEqual(label('離脱しているのに対象（○）が付いている'), exitedMarked + '件');
     const pos = t.find('ダッシュボード', 'IDが重複している');
     const cell = t.sheet('ダッシュボード')._cell(pos[0], 5);
     const gid = t.sheet('患者一覧').getSheetId();
@@ -581,13 +651,21 @@ function scenarioMain() {
     assert.ok(t.sheet('ダッシュボード')._rowHeights[pos[0]] >= 22);
   });
 
+  test('集計のときに、対象の書き方を○か空欄にそろえる（TRUE・x など）', () => {
+    const sh = t.sheet('患者一覧');
+    sh.getRange('G50').setValue(true);
+    sh.getRange('G51').setValue('x');
+    gs.refreshNow();
+    assert.deepStrictEqual(t.values('患者一覧', 'G50:G51'), [['○'], ['']]);
+  });
+
   test('自動更新：変更がなければ何もしない／変更があれば集計し直す', () => {
     let n = 0;
     const real = gs.refreshAll_;
     gs.refreshAll_ = function (o) { n++; return real(o); };
     gs.autoRefresh();
     assert.strictEqual(n, 0, '変更なし');
-    t.sheet('患者一覧').getRange('I2').setValue('メモを追加');
+    t.sheet('患者一覧').getRange('J2').setValue('メモを追加');
     gs.autoRefresh();
     assert.strictEqual(n, 1, '変更あり');
     gs.autoRefresh();
@@ -607,17 +685,19 @@ function scenarioMain() {
     const p = list.find(x => x.id === 1);
     assert.deepStrictEqual(Object.keys(p).sort(), ['cloud', 'days_to_next', 'end_date', 'exit_date', 'id', 'intro_date', 'kind',
       'last_visit', 'months_no_visit', 'name', 'next_due', 'other', 'reason', 'start_date', 'status', 'supplier', 'target'].sort());
-    const withPeriod = patients.find(q => q.repStart !== null && status(q) === '利用中');
-    const b = list.find(x => x.id === withPeriod.id);
+    const withMark = patients.find(q => q.target && q.repStart !== null);
+    const b = list.find(x => x.name === withMark.name);
     assert.strictEqual(b.target, 'TRUE');
     assert.strictEqual(b.start_date, '2026/09/01');
+    const noMark = patients.find(q => !q.target && q.repStart !== null);
+    assert.strictEqual(list.find(x => x.name === noMark.name).target, 'FALSE', '期間があっても○がなければ対象外');
   });
 
   test('もう一度セットアップしてもデータは消えず、保護や規則が重ならない', () => {
-    const before = t.values('患者一覧', 'A2:K401');
+    const before = t.values('患者一覧', 'A2:L401');
     const cf = t.sheet('患者一覧').getConditionalFormatRules().length;
     gs.setup();
-    assert.deepStrictEqual(t.values('患者一覧', 'A2:K401'), before);
+    assert.deepStrictEqual(t.values('患者一覧', 'A2:L401'), before);
     assert.strictEqual(t.sheet('患者一覧').getConditionalFormatRules().length, cf);
     assert.strictEqual(t.sheet('患者一覧').getProtections('RANGE').length, 1);
     assert.strictEqual(t.sheet('ダッシュボード').getProtections('SHEET').length, 1);
@@ -633,12 +713,12 @@ function scenarioMain() {
   });
 
   test('見出しを消されたら、分かりやすいエラーを出す', () => {
-    t.sheet('患者一覧').getRange('G1').setValue('導入');
+    t.sheet('患者一覧').getRange('H1').setValue('導入');
     const before = t.state.alerts.length;
     gs.refreshNow();
     const a = t.state.alerts[before];
     assert.ok(a && a.prompt.includes('「導入日」の列が見つかりません'), a && a.prompt);
-    t.sheet('患者一覧').getRange('G1').setValue('導入日');
+    t.sheet('患者一覧').getRange('H1').setValue('導入日');
     gs.autoRefresh();   // 自動更新は例外を出さない
   });
 
@@ -656,7 +736,8 @@ function scenarioMain() {
 
   test('使い方タブ：見出しと説明', () => {
     assert.ok(t.find('使い方', 'CPAP 患者管理 ─ 使い方'));
-    assert.ok(sheetContains(t, '使い方', 'レポート期間をまとめて入力'));
+    assert.ok(sheetContains(t, '使い方', 'レポート（期間・対象○）をまとめて入力'));
+    assert.ok(sheetContains(t, '使い方', '対象（○）をすべて消す'));
   });
 
   test('サイドバーを開ける（テンプレートの値が入る）', () => {
@@ -682,9 +763,9 @@ function scenarioImport() {
   const d = (y, m, dd) => t.cellDate(y, m, dd);
   const rows = [
     [101, '旧 太郎', 'AirSense10', 'フクダライフテック', d(2024, 5, 10), d(2026, 8, 1), '', '', d(2026, 11, 1), 'AirView', d(2026, 8, 1), d(2026, 9, 30), '○', '利用中', 2024],
-    [102, '旧 花子', 'SleepStyle Auto Rx', 'チェスト|SleepStyle Auto Rx', d(2023, 2, 1), '', d(2025, 3, 31), '他院へ移管', '', 'InfoSmart', '', '', '', '移管', 2023],
+    [102, '旧 花子', 'SleepStyle Auto Rx', 'チェスト|SleepStyle Auto Rx', d(2023, 2, 1), '', d(2025, 3, 31), '他院へ移管', '', 'InfoSmart', '', '', '○', '移管', 2023],
     [103, '旧 一郎', 'ムラタMX', 'チェスト', d(2025, 1, 15), '', d(2025, 2, 1), '', '', 'CSC', '', '', '', '離脱', 2025],
-    ['', '旧 次郎', 'SBOX', 'RISEF', '2026/7/7', '', '', '', '', 'SEFAM', '', '', '', '利用中', 2026],
+    ['', '旧 次郎', 'SBOX', 'RISEF', '2026/7/7', '', '', '', '', 'SEFAM', '', '', true, '利用中', 2026],
     [105, '旧 三郎', 'DreamStation', 'フィリップス', d(2026, 9, 1), '', '', '', '', '', '', '', '', '予定', 2026],
     [106, '旧 四郎', 'AirMini', '新しい業者', d(2025, 6, 1), '', '', '', '', '', '', '', '', '利用中', 2025],
     ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']
@@ -710,18 +791,19 @@ function scenarioImport() {
     gs.setup();
     const ask = t.state.alerts.find(a => a.title === '旧データの取り込み');
     assert.ok(ask, '取り込みの確認が出ていない');
-    const v = t.values('患者一覧', 'A2:K7');
+    const v = t.values('患者一覧', 'A2:L7');
     assert.strictEqual(v.length, 6);
     const by = {};
     v.forEach(r => { by[r[1]] = r; });
-    assert.deepStrictEqual([by['旧 太郎'][0], by['旧 太郎'][3], by['旧 太郎'][9], t.ymdOf(by['旧 太郎'][5])],
-      [101, 'フクダライフテック', '利用中', '2026/09/30']);
-    assert.deepStrictEqual([by['旧 花子'][3], by['旧 花子'][9], by['旧 花子'][10], by['旧 花子'][8]],
-      ['チェスト', '離脱', '移管・転院', '他院へ移管']);
-    assert.deepStrictEqual([by['旧 一郎'][9], by['旧 一郎'][10]], ['離脱', '不明']);
+    assert.deepStrictEqual([by['旧 太郎'][0], by['旧 太郎'][3], by['旧 太郎'][10], t.ymdOf(by['旧 太郎'][5]), by['旧 太郎'][6]],
+      [101, 'フクダライフテック', '利用中', '2026/09/30', '○'], '対象の○も取り込む');
+    assert.deepStrictEqual([by['旧 花子'][3], by['旧 花子'][10], by['旧 花子'][11], by['旧 花子'][9], by['旧 花子'][6]],
+      ['チェスト', '離脱', '移管・転院', '他院へ移管', ''], '離脱した人は○を外す');
+    assert.deepStrictEqual([by['旧 一郎'][10], by['旧 一郎'][11]], ['離脱', '不明']);
     assert.strictEqual(by['旧 次郎'][0], 107, 'IDがない人は続きの番号');
-    assert.strictEqual(t.ymdOf(by['旧 次郎'][6]), '2026/07/07', '文字の日付も日付に');
-    assert.strictEqual(by['旧 三郎'][9], '利用中', '「予定」は利用中に');
+    assert.strictEqual(t.ymdOf(by['旧 次郎'][7]), '2026/07/07', '文字の日付も日付に');
+    assert.strictEqual(by['旧 次郎'][6], '○', '旧バージョンのチェックボックス（TRUE）も○に');
+    assert.strictEqual(by['旧 三郎'][10], '利用中', '「予定」は利用中に');
     assert.strictEqual(t.state.triggers.length, 1, '旧トリガーは消して新しいものだけ');
     assert.strictEqual(t.state.triggers[0].getHandlerFunction(), 'autoRefresh');
   });
@@ -771,6 +853,33 @@ function scenarioImport() {
 }
 
 // =====================================================================
+// シナリオ：v2.0（対象の列がない患者一覧）からの更新
+// =====================================================================
+function scenarioUpgrade() {
+  const t = load({ sheetTz: sheetTzArg });
+  const gs = t.gs;
+  const d = (y, m, dd) => t.cellDate(y, m, dd);
+  const sh = t.ss.insertSheet('患者一覧');
+  sh.addDeveloperMetadata('cpapApp', 'ledger');
+  sh.getRange(1, 1, 1, 11).setValues([['ID', '名前', '機器', '業者', 'レポート開始日', 'レポート終了日', '導入日', '離脱日',
+    '備考', '状態', '離脱理由']]);
+  sh.getRange(2, 1, 2, 11).setValues([
+    [1, '前版 太郎', 'SBOX', 'RISEF', d(2026, 9, 1), d(2026, 9, 30), d(2025, 1, 10), '', 'メモ', '利用中', ''],
+    [2, '前版 花子', 'AirMini', 'RISEF', '', '', d(2024, 3, 3), d(2025, 5, 5), '', '離脱', '自己中断']]);
+  test('セットアップすると「対象」がレポート終了日の右に入り、データはそのまま', () => {
+    gs.setup();
+    assert.deepStrictEqual(t.display('患者一覧', 'A1:L1')[0],
+      ['ID', '名前', '機器', '業者', 'レポート開始日', 'レポート終了日', '対象', '導入日', '離脱日', '備考', '状態', '離脱理由']);
+    const v = t.values('患者一覧', 'A2:L3');
+    assert.deepStrictEqual([v[0][1], v[0][6], t.ymdOf(v[0][7]), v[0][9], v[0][10]], ['前版 太郎', '', '2025/01/10', 'メモ', '利用中']);
+    assert.deepStrictEqual([v[1][1], t.ymdOf(v[1][8]), v[1][10], v[1][11]], ['前版 花子', '2025/05/05', '離脱', '自己中断']);
+    assert.ok(t.sheet('患者一覧').getRange('G2').getDataValidation().crit.list.includes('○'));
+    assert.strictEqual(t.values('ダッシュボード', 'A5')[0][0], 1);
+  });
+  finish();
+}
+
+// =====================================================================
 // シナリオ：同じ名前のシートがすでにある
 // =====================================================================
 function scenarioCollision() {
@@ -795,7 +904,7 @@ function scenarioCollision() {
     gs.refreshNow();
     assert.ok(t.find('ダッシュボード', '導入日が空欄'));
     assert.ok(t.find('ダッシュボード', '機器が空欄'));
-    t.typeIn('患者一覧', 'G2', 't');
+    t.typeIn('患者一覧', 'H2', 't');
     t.typeIn('患者一覧', 'C2', 'DreamStation');
     gs.refreshNow();
     assert.strictEqual(t.values('月別', 'B6')[0][0], 1);
@@ -825,12 +934,12 @@ function scenarioBig() {
   test('貼り付けが300行を超えたら入力時の処理は飛ばし、集計のときに整える', () => {
     const more = makePatients(350, 5).map((p, i) => Object.assign(p, { id: '', name: '追加' + i, intro: Date.UTC(2026, 8, 15), exit: null }));
     const d = ms => (ms === null ? '' : t.cellDate(...ymd(ms)));
-    const rows = more.map(p => ['', p.name, p.device, p.supplier, '', '', d(p.intro), '', '', '', '']);
+    const rows = more.map(p => ['', p.name, p.device, p.supplier, '', '', '', d(p.intro), '', '', '', '']);
     t.paste('患者一覧', 3002, 1, rows);
     assert.strictEqual(t.values('患者一覧', 'A3002')[0][0], '');
     gs.refreshNow();
     assert.strictEqual(t.values('患者一覧', 'A3002')[0][0], 3001);
-    assert.strictEqual(t.values('患者一覧', 'J3351')[0][0], '利用中');
+    assert.strictEqual(t.values('患者一覧', 'K3351')[0][0], '利用中');
     const sh = t.sheet('患者一覧');
     assert.ok(sh.getRange(3351, 3).getDataValidation(), '増えた行にもドロップダウン');
   });
@@ -846,23 +955,24 @@ function scenarioTz() {
   gs.setup();
   test('t を入れると、シートのタイムゾーンでの今日の0時になる', () => {
     t.typeIn('患者一覧', 'B2', 'テスト');
-    t.typeIn('患者一覧', 'G2', 't');
-    const v = t.values('患者一覧', 'G2')[0][0];
+    t.typeIn('患者一覧', 'H2', 't');
+    const v = t.values('患者一覧', 'H2')[0][0];
     const p = require('./gas-mock').tzParts(new Date(t.nowMs), t.ss.getSpreadsheetTimeZone());
     assert.strictEqual(t.ymdOf(v), `${p.y}/${pad(p.m)}/${pad(p.d)}`);
     assert.ok(t.isMidnight(v));
   });
   test('登録した導入日がずれない', () => {
     gs.registerPatient({ name: 'TZ', device: 'SBOX', supplier: 'RISEF', intro: '2026-09-15', repStart: '2026-09-01', repEnd: '2026-09-30' });
-    const v = t.values('患者一覧', 'E3:G3')[0];
+    const all = t.values('患者一覧', 'E3:H3')[0];
+    const v = [all[0], all[1], all[3]];
     assert.deepStrictEqual(v.map(t.ymdOf), ['2026/09/01', '2026/09/30', '2026/09/15']);
     assert.ok(v.every(t.isMidnight));
   });
   test('月の境目の日付が正しい月に入る', () => {
     const sh = t.sheet('患者一覧');
-    sh.getRange('B4:H5').setValues([
-      ['月末', 'SBOX', 'RISEF', '', '', t.cellDate(2026, 8, 31), ''],
-      ['月初', 'SBOX', 'RISEF', '', '', t.cellDate(2026, 9, 1), t.cellDate(2026, 9, 30)]]);
+    sh.getRange('B4:I5').setValues([
+      ['月末', 'SBOX', 'RISEF', '', '', '', t.cellDate(2026, 8, 31), ''],
+      ['月初', 'SBOX', 'RISEF', '', '', '', t.cellDate(2026, 9, 1), t.cellDate(2026, 9, 30)]]);
     gs.refreshNow();
     const m = tableByLabel(t, '月別', 6, 5);
     // シートのタイムゾーンでの「今日」（LA ではまだ 9/30 なので、t で入れた人も9月になる）
@@ -870,7 +980,7 @@ function scenarioTz() {
     assert.strictEqual(m['2026/08'][1], 1);
     assert.strictEqual(m['2026/09'][1], today.m === 9 ? 3 : 2);
     assert.strictEqual(m['2026/09'][2], 1);
-    const v = t.values('患者一覧', 'G4:G5').map(r => t.ymdOf(r[0]));
+    const v = t.values('患者一覧', 'H4:H5').map(r => t.ymdOf(r[0]));
     assert.deepStrictEqual(v, ['2026/08/31', '2026/09/01']);
   });
   test('レポート期間（前回の続き）もずれない', () => {
@@ -881,4 +991,5 @@ function scenarioTz() {
   finish();
 }
 
-({ main: scenarioMain, import: scenarioImport, collision: scenarioCollision, big: scenarioBig, tz: scenarioTz })[scenario]();
+({ main: scenarioMain, import: scenarioImport, upgrade: scenarioUpgrade, collision: scenarioCollision, big: scenarioBig,
+   tz: scenarioTz })[scenario]();
