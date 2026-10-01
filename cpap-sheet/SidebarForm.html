@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 12px; font: 13px/1.5 Arial, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #202124; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 2px solid #1f4e79; }
+    .tabs button { flex: 1; padding: 7px 0; border: 1px solid #c8d3e0; border-bottom: none; border-radius: 6px 6px 0 0;
+                   background: #f1f4f8; color: #1f4e79; font-weight: bold; cursor: pointer; }
+    .tabs button.on { background: #1f4e79; color: #fff; border-color: #1f4e79; }
+    .panel { display: none; }
+    .panel.on { display: block; }
+    label { display: block; margin: 10px 0 3px; font-weight: bold; font-size: 12px; }
+    .req { color: #c5221f; font-weight: normal; font-size: 11px; margin-left: 4px; }
+    .hint { color: #5f6368; font-weight: normal; font-size: 11px; margin-left: 4px; }
+    input[type=text], input[type=date], select, textarea {
+      width: 100%; padding: 6px 7px; border: 1px solid #b9c2cc; border-radius: 4px; font: inherit; background: #fff; }
+    input:focus, select:focus, textarea:focus { outline: 2px solid #8ab4f8; border-color: #1a73e8; }
+    .inline { display: flex; gap: 6px; align-items: center; }
+    .inline input { flex: 1; min-width: 0; }
+    .period { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px; align-items: center; }
+    input[type=date] { min-width: 0; padding: 6px 4px; }
+    button { font: inherit; padding: 6px 10px; border-radius: 4px; border: 1px solid #b9c2cc; background: #fff;
+             color: #1f4e79; cursor: pointer; }
+    button:hover { background: #f1f4f8; }
+    button.primary { background: #1f4e79; border-color: #1f4e79; color: #fff; font-weight: bold; }
+    button.primary:hover { background: #2e5f8f; }
+    button:disabled { opacity: .5; cursor: default; }
+    .wide { width: 100%; margin-top: 14px; padding: 9px; }
+    .msg { margin-top: 10px; padding: 8px 9px; border-radius: 4px; white-space: pre-wrap; display: none; }
+    .msg.ok { display: block; background: #e6f4ea; color: #17603a; }
+    .msg.err { display: block; background: #fce8e6; color: #9c0006; }
+    .msg.info { display: block; background: #eaf1fb; color: #1f3864; }
+    .msg.ask { display: block; background: #fff2cc; color: #5f4b00; }
+    .msg .actions { margin-top: 8px; display: flex; gap: 6px; }
+    ol.steps { margin: 0; padding-left: 20px; }
+    ol.steps > li { margin-bottom: 14px; }
+    .choice { margin: 7px 0; padding: 7px 8px; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; }
+    .choice label { display: inline; margin: 0; font-size: 13px; cursor: pointer; }
+    .choice.on { border-color: #1a73e8; background: #e8f0fe; }
+    .choice small { display: block; color: #5f6368; margin: 2px 0 0 22px; }
+    .choice .period { margin: 6px 0 0 0; }
+    .note { color: #5f6368; font-size: 12px; }
+    footer { margin-top: 18px; padding-top: 10px; border-top: 1px solid #e0e0e0; }
+  </style>
+</head>
+<body data-panel="<?= panel ?>">
+  <div class="tabs" role="tablist">
+    <button type="button" data-tab="register">新規登録</button>
+    <button type="button" data-tab="report">レポート期間</button>
+  </div>
+
+  <!-- 新規登録 -->
+  <form id="register" class="panel" autocomplete="off">
+    <label for="f-id">ID <span class="hint" id="id-hint">空欄なら自動で番号を付けます</span></label>
+    <input type="text" id="f-id">
+
+    <label for="f-name">名前<span class="req">必須</span></label>
+    <input type="text" id="f-name" required>
+
+    <label for="f-device">機器<span class="req">必須</span></label>
+    <select id="f-device" required></select>
+
+    <label for="f-supplier">業者<span class="req">必須</span></label>
+    <select id="f-supplier" required></select>
+
+    <label for="f-intro">導入日<span class="req">必須</span></label>
+    <div class="inline">
+      <input type="date" id="f-intro" required>
+      <button type="button" id="intro-today">今日</button>
+    </div>
+
+    <label>レポート期間<span class="hint">あとで入れてもかまいません</span></label>
+    <div class="period">
+      <input type="date" id="f-repStart" aria-label="レポート開始日">
+      <span>〜</span>
+      <input type="date" id="f-repEnd" aria-label="レポート終了日">
+    </div>
+
+    <label for="f-note">備考</label>
+    <textarea id="f-note" rows="2"></textarea>
+
+    <button type="submit" class="primary wide" id="reg-btn">登録する</button>
+    <div id="reg-msg" class="msg" role="status"></div>
+  </form>
+
+  <!-- レポート期間 -->
+  <section id="report" class="panel">
+    <ol class="steps">
+      <li>
+        <b>「患者一覧」で、期間を入れたい人の行を選びます。</b>
+        <div class="note">見出しの ▼ で機器などを絞り込んでから選ぶと便利です。離脱した人と、絞り込みで隠れている行には入りません。</div>
+        <button type="button" id="sel-btn" style="margin-top:6px">選んだ行を確認</button>
+        <div id="sel-msg" class="msg" role="status"></div>
+      </li>
+      <li>
+        <b>期間の決め方を選びます。</b>
+        <div class="choice">
+          <label><input type="radio" name="mode" value="lastMonth" checked> 先月</label>
+          <small id="lm-text"></small>
+        </div>
+        <div class="choice">
+          <label><input type="radio" name="mode" value="thisMonth"> 今月（1日〜昨日）</label>
+          <small id="tm-text"></small>
+        </div>
+        <div class="choice">
+          <label><input type="radio" name="mode" value="continue"> 前回の続き</label>
+          <small>前回のレポート終了日の翌日から（初めての人は導入日から）</small>
+          <div class="period"><span class="note">終了日</span><span></span><input type="date" id="cont-end" aria-label="終了日"></div>
+        </div>
+        <div class="choice">
+          <label><input type="radio" name="mode" value="fixed"> 日付を指定</label>
+          <div class="period"><input type="date" id="fix-start" aria-label="開始日"><span>〜</span><input type="date" id="fix-end" aria-label="終了日"></div>
+        </div>
+      </li>
+      <li>
+        <button type="button" class="primary" id="apply-btn">選んだ行に入れる</button>
+        <button type="button" id="clear-btn">選んだ行の期間を消す</button>
+        <div id="rep-msg" class="msg" role="status"></div>
+      </li>
+    </ol>
+  </section>
+
+  <footer>
+    <button type="button" id="refresh-btn">集計を今すぐ更新</button>
+    <div id="refresh-msg" class="msg" role="status"></div>
+    <div class="note" style="margin-top:6px">集計は入力から10分ほどで自動でも更新されます。</div>
+  </footer>
+
+  <script>
+    var DATA = null;
+    var $ = function (id) { return document.getElementById(id); };
+
+    /** サーバー側の関数を呼ぶ（呼んでいる間はボタンを押せなくする） */
+    function call(fn, arg, onOk, onErr, busyButtons) {
+      (busyButtons || []).forEach(function (b) { b.disabled = true; });
+      var done = function () { (busyButtons || []).forEach(function (b) { b.disabled = false; }); };
+      var runner = google.script.run
+        .withSuccessHandler(function (res) { done(); onOk(res); })
+        .withFailureHandler(function (err) { done(); onErr(err && err.message ? err.message : String(err)); });
+      if (arg === undefined) runner[fn](); else runner[fn](arg);
+    }
+
+    function show(el, kind, text, actions) {
+      el.className = 'msg ' + kind;
+      el.textContent = text;
+      if (actions) {
+        var box = document.createElement('div');
+        box.className = 'actions';
+        actions.forEach(function (a) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = a.label;
+          if (a.primary) b.className = 'primary';
+          b.onclick = a.onClick;
+          box.appendChild(b);
+        });
+        el.appendChild(box);
+      }
+    }
+    function hide(el) { el.className = 'msg'; el.textContent = ''; }
+
+    function slash(iso) { return iso ? iso.replace(/-/g, '/') : ''; }
+
+    // ---- タブ ----
+    function openTab(name) {
+      document.querySelectorAll('[data-tab]').forEach(function (b) {
+        b.classList.toggle('on', b.getAttribute('data-tab') === name);
+      });
+      document.querySelectorAll('.panel').forEach(function (p) { p.classList.toggle('on', p.id === name); });
+    }
+    document.querySelectorAll('[data-tab]').forEach(function (b) {
+      b.addEventListener('click', function () { openTab(b.getAttribute('data-tab')); });
+    });
+    openTab(document.body.getAttribute('data-panel') === 'report' ? 'report' : 'register');
+
+    // ---- 初期データ ----
+    function fillSelect(sel, items, placeholder, keepValue) {
+      var keep = keepValue ? sel.value : '';
+      sel.innerHTML = '';
+      var first = document.createElement('option');
+      first.value = '';
+      first.textContent = placeholder;
+      sel.appendChild(first);
+      items.forEach(function (x) {
+        var o = document.createElement('option');
+        o.value = x;
+        o.textContent = x;
+        sel.appendChild(o);
+      });
+      if (items.indexOf(keep) >= 0) sel.value = keep;
+    }
+
+    // 業者が複数ある機器は、前の人の業者を引き継がずに毎回選んでもらう（取り違え防止）
+    function updateSuppliers() {
+      var dev = $('f-device').value;
+      var list = (dev && DATA.deviceSuppliers[dev] && DATA.deviceSuppliers[dev].length)
+        ? DATA.deviceSuppliers[dev] : DATA.suppliers;
+      fillSelect($('f-supplier'), list, list.length > 1 ? '選んでください' : '（業者）', false);
+      if (dev && list.length === 1) $('f-supplier').value = list[0];
+    }
+
+    function applyData(data) {
+      DATA = data;
+      fillSelect($('f-device'), data.devices, '選んでください', true);
+      updateSuppliers();
+      $('f-id').placeholder = data.nextId !== '' ? '例：' + data.nextId : '';
+      $('id-hint').textContent = data.nextId !== '' ? '空欄なら ' + data.nextId + ' になります' : '必要なら入力してください';
+      if (!$('f-intro').value) $('f-intro').value = data.today;
+      $('lm-text').textContent = slash(data.lastMonth.start) + ' 〜 ' + slash(data.lastMonth.end);
+      $('tm-text').textContent = data.thisMonth.end
+        ? slash(data.thisMonth.start) + ' 〜 ' + slash(data.thisMonth.end)
+        : '今日が1日のため使えません';
+      if (!$('cont-end').value) $('cont-end').value = data.yesterday;
+    }
+
+    function loadData() {
+      call('getFormData', undefined, applyData, function (m) { show($('reg-msg'), 'err', m); show($('rep-msg'), 'err', m); });
+    }
+
+    $('f-device').addEventListener('change', updateSuppliers);
+    $('intro-today').addEventListener('click', function () { if (DATA) $('f-intro').value = DATA.today; });
+
+    // ---- 新規登録 ----
+    function formValues(force) {
+      return {
+        id: $('f-id').value.trim(),
+        name: $('f-name').value.trim(),
+        device: $('f-device').value,
+        supplier: $('f-supplier').value,
+        intro: $('f-intro').value,
+        repStart: $('f-repStart').value,
+        repEnd: $('f-repEnd').value,
+        note: $('f-note').value.trim(),
+        force: !!force
+      };
+    }
+
+    function submitRegister(force) {
+      var msg = $('reg-msg');
+      show(msg, 'info', '登録しています…');
+      call('registerPatient', formValues(force), function (res) {
+        if (res.status === 'dup') {
+          show(msg, 'ask', res.message, [
+            { label: '登録する', primary: true, onClick: function () { submitRegister(true); } },
+            { label: 'やめる', onClick: function () { hide(msg); } }
+          ]);
+          return;
+        }
+        show(msg, 'ok', res.message);
+        ['f-id', 'f-name', 'f-device', 'f-repStart', 'f-repEnd', 'f-note'].forEach(function (id) { $(id).value = ''; });
+        updateSuppliers();
+        if (DATA) {
+          DATA.nextId = res.nextId;
+          $('f-id').placeholder = res.nextId !== '' ? '例：' + res.nextId : '';
+          $('id-hint').textContent = res.nextId !== '' ? '空欄なら ' + res.nextId + ' になります' : '必要なら入力してください';
+        }
+        $('f-name').focus();
+      }, function (m) { show(msg, 'err', m); }, [$('reg-btn')]);
+    }
+
+    $('register').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      submitRegister(false);
+    });
+
+    // ---- レポート期間 ----
+    function periodRequest() {
+      var mode = document.querySelector('input[name=mode]:checked').value;
+      if (mode === 'lastMonth') return { mode: 'fixed', start: DATA.lastMonth.start, end: DATA.lastMonth.end };
+      if (mode === 'thisMonth') {
+        if (!DATA.thisMonth.end) throw new Error('今日が1日のため「今月」は使えません。「先月」か「日付を指定」を選んでください。');
+        return { mode: 'fixed', start: DATA.thisMonth.start, end: DATA.thisMonth.end };
+      }
+      if (mode === 'continue') return { mode: 'continue', end: $('cont-end').value };
+      return { mode: 'fixed', start: $('fix-start').value, end: $('fix-end').value };
+    }
+
+    function describe(req) {
+      if (req.mode === 'continue') return '前回の続き 〜 ' + slash(req.end);
+      return slash(req.start) + ' 〜 ' + slash(req.end);
+    }
+
+    // 枠のどこを押しても、中の日付欄に触っても、その選択肢を選んだことにする
+    function markChoices() {
+      document.querySelectorAll('.choice').forEach(function (c) {
+        c.classList.toggle('on', c.querySelector('input[type=radio]').checked);
+      });
+    }
+    document.querySelectorAll('.choice').forEach(function (c) {
+      var radio = c.querySelector('input[type=radio]');
+      var pick = function () { radio.checked = true; markChoices(); };
+      c.addEventListener('click', pick);
+      c.querySelectorAll('input[type=date]').forEach(function (d) {
+        d.addEventListener('focus', pick);
+        d.addEventListener('change', pick);
+      });
+    });
+    markChoices();
+
+    var repButtons = function () { return [$('apply-btn'), $('clear-btn'), $('sel-btn')]; };
+
+    $('sel-btn').addEventListener('click', function () {
+      call('getSelectionInfo', undefined, function (res) { show($('sel-msg'), 'info', res.message); },
+        function (m) { show($('sel-msg'), 'err', m); }, repButtons());
+    });
+
+    $('apply-btn').addEventListener('click', function () {
+      var msg = $('rep-msg');
+      var req;
+      try { req = periodRequest(); } catch (e) { show(msg, 'err', e.message); return; }
+      show(msg, 'info', '入れています…（' + describe(req) + '）');
+      call('applyReportPeriod', req, function (res) { show(msg, 'ok', res.message); },
+        function (m) { show(msg, 'err', m); }, repButtons());
+    });
+
+    $('clear-btn').addEventListener('click', function () {
+      var msg = $('rep-msg');
+      show(msg, 'ask', '選んだ行のレポート開始日・終了日を消します。よろしいですか？', [
+        { label: '消す', primary: true, onClick: function () {
+          show(msg, 'info', '消しています…');
+          call('applyReportPeriod', { mode: 'clear' }, function (res) { show(msg, 'ok', res.message); },
+            function (m) { show(msg, 'err', m); }, repButtons());
+        } },
+        { label: 'やめる', onClick: function () { hide(msg); } }
+      ]);
+    });
+
+    // ---- 集計 ----
+    $('refresh-btn').addEventListener('click', function () {
+      var msg = $('refresh-msg');
+      show(msg, 'info', '集計を更新しています…（数十秒かかることがあります）');
+      call('refreshFromSidebar', undefined, function (text) { show(msg, 'ok', text); },
+        function (m) { show(msg, 'err', m); }, [$('refresh-btn')]);
+    });
+
+    loadData();
+  </script>
+</body>
+</html>
