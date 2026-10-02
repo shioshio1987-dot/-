@@ -54,6 +54,9 @@ var LEDGER = [
   { key: 'device', head: '機器', width: 150, note: '［マスタ］タブにある機器から選びます。' },
   { key: 'supplier', head: '業者', width: 140,
     note: '機器を選ぶと、業者が1社だけの機器は自動で入ります。' },
+  { key: 'cloud', head: 'クラウド区分', width: 130,
+    note: '機器を選ぶと［マスタ］のクラウドが自動で入ります（AirView・InfoSmart など）。\n' +
+          'マスタにクラウドがない機器のときだけ、手で入れてください。' },
   { key: 'repStart', head: 'レポート開始日', width: 105, date: true,
     note: 'レポートを出す期間の初日です。\n' +
           'まとめて入れるときは、行を選んでメニュー［CPAP管理］→［レポート期間をまとめて入力］。' },
@@ -111,6 +114,7 @@ var OLD_HEADERS = {
   name:     ['名前', '氏名'],
   device:   ['CPAP機種', '機種', '種類', '機械の種類', '機器'],
   supplier: ['仕入先', '業者', '社名'],
+  cloud:    ['クラウド区分', 'クラウド'],
   repStart: ['開始日', 'レポート開始日'],
   repEnd:   ['終了日', 'レポート終了日'],
   target:   ['対象'],
@@ -414,6 +418,7 @@ function applyListRules_() {
   var n = sh.getMaxRows() - 1;
   listRule_(sh.getRange(2, c.device, n, 1), m.devices);
   listRule_(sh.getRange(2, c.supplier, n, 1), m.suppliers);
+  listRule_(sh.getRange(2, c.cloud, n, 1), m.clouds);
   listRule_(sh.getRange(2, c.reason, n, 1), m.reasons);
 }
 
@@ -598,7 +603,11 @@ function onLedgerEdit_(e, sh) {
       if (!trim_(get('reason'))) msgs.push(row + '行目：離脱理由も選んでください。');
     }
 
-    // 4) 機器 → 業者（1社だけなら自動で入れる）
+    // 4) 機器 → クラウド区分（マスタにあれば）、業者（1社だけなら自動で入れる）
+    if (master && touched('device')) {
+      var cl = cloudOf_(master, trim_(get('device')));
+      if (cl && get('cloud') !== cl) put('cloud', cl);
+    }
     if (master && (touched('device') || touched('supplier'))) {
       var dev = trim_(get('device'));
       var sup = trim_(get('supplier'));
@@ -629,10 +638,10 @@ function onLedgerEdit_(e, sh) {
   }
 }
 
-/** 機器別一覧の黄色いセル（機器・業者・状態・対象）を変えたら、その場で表示を切り替える */
+/** 機器別一覧の黄色いセル（クラウド・機器・業者・状態・対象）を変えたら、その場で表示を切り替える */
 function onDeviceSelectorEdit_(e) {
   var r = e.range;
-  if (r.getRow() > 3 || r.getLastRow() < 3 || r.getLastColumn() < 3 || r.getColumn() > 6) return;
+  if (r.getRow() > 3 || r.getLastRow() < 3 || r.getLastColumn() < 3 || r.getColumn() > 7) return;
   var ctx = loadContext_();
   writeDeviceList_(ctx, categoryLists_(ctx));
 }
@@ -702,7 +711,8 @@ function registerPatient(form) {
   if (intro === null) throw new Error('導入日を入れてください。');
   if ((repStart === null) !== (repEnd === null)) throw new Error('レポート期間は開始日と終了日の両方を入れてください。');
   if (repStart !== null && repEnd < repStart) throw new Error('レポート終了日が開始日より前になっています。');
-  var info = readMaster_().info[device];
+  var master = readMaster_();
+  var info = master.info[device];
   if (info && info.suppliers.length && info.suppliers.indexOf(supplier) < 0) {
     throw new Error(device + ' の業者は「' + info.suppliers.join('／') + '」から選んでください。');
   }
@@ -734,7 +744,7 @@ function registerPatient(form) {
     ensureSize_(sh, row, c.lastCol);
     var rec = {
       id: /^\d+$/.test(id) ? Number(id) : id,
-      name: name, device: device, supplier: supplier,
+      name: name, device: device, supplier: supplier, cloud: cloudOf_(master, device),
       repStart: repStart === null ? '' : dnToCellDate_(repStart),
       repEnd: repEnd === null ? '' : dnToCellDate_(repEnd),
       target: form.target === false ? '' : TARGET_MARK,
@@ -981,7 +991,7 @@ function parsePatient_(r, c, row, today) {
   var g = function (k) { return r[c[k] - 1]; };
   var p = {
     row: row, id: g('id'), idText: trim_(g('id')), name: trim_(g('name')),
-    device: trim_(g('device')), supplier: trim_(g('supplier')), note: trim_(g('note')),
+    device: trim_(g('device')), supplier: trim_(g('supplier')), cloud: trim_(g('cloud')), note: trim_(g('note')),
     status: trim_(g('status')), reason: trim_(g('reason')), raw: {}, bad: {}, fix: {}
   };
   var mark = targetMark_(g('target'));
@@ -1033,6 +1043,11 @@ function syncLedger_(ctx) {
       p.idText = String(idInfo.next);
       idInfo.next++;
     }
+    var cloud = cloudOf_(ctx.master, p.device);
+    if (cloud && cloud !== p.cloud) {
+      put(p, 'cloud', cloud);
+      p.cloud = cloud;
+    }
     var want = expectedStatus_(p, ctx.today);
     if (want && want !== p.status) {
       put(p, 'status', want);
@@ -1045,7 +1060,7 @@ function syncLedger_(ctx) {
 
 /** マスタの読み込み（見出しの名前で列を探す） */
 function readMaster_() {
-  var m = { combos: [], devices: [], suppliers: [], reasons: [], info: {}, combo: {}, raw: [], broken: false };
+  var m = { combos: [], devices: [], suppliers: [], clouds: [], reasons: [], info: {}, combo: {}, raw: [], broken: false };
   var sh = findSheet_('master');
   if (!sh || sh.getLastRow() < 5) return m;
   var lastCol = Math.max(sh.getLastColumn(), REASON_COL);
@@ -1079,6 +1094,7 @@ function readMaster_() {
         if (sup && m.info[dev].suppliers.indexOf(sup) < 0) m.info[dev].suppliers.push(sup);
       }
       if (sup && m.suppliers.indexOf(sup) < 0) m.suppliers.push(sup);
+      if (cb.cloud && m.clouds.indexOf(cb.cloud) < 0) m.clouds.push(cb.cloud);
     }
     var rs = iReason >= 0 ? trim_(r[iReason]) : '';
     if (rs && m.reasons.indexOf(rs) < 0) m.reasons.push(rs);
@@ -1106,11 +1122,14 @@ function categoryLists_(ctx) {
   };
   return {
     devices: pick(ctx.master.devices, function (p) { return p.device; }),
+    clouds: pick(ctx.master.clouds, function (p) { return p.cloud; }),
     suppliers: pick(ctx.master.suppliers, function (p) { return p.supplier; })
   };
 }
 
 function devOf_(p) { return p.device || NONE; }
+function cloudOf_(master, device) { return device && master.info[device] ? master.info[device].cloud : ''; }
+function clOf_(p) { return p.cloud || NONE; }
 function supOf_(p) { return p.supplier || NONE; }
 
 /** 導入日があり、離脱日が導入日より前でない（期間の集計に使える） */
@@ -1325,6 +1344,7 @@ function dataChecks_(ctx) {
     return p.status === STATUS_EXIT && p.exit === null && !p.bad.exit;
   }));
   add('離脱理由が空欄', 'warn', P.filter(function (p) { return p.status === STATUS_EXIT && !p.reason; }));
+  add('クラウド区分が空欄', 'warn', P.filter(function (p) { return !p.cloud; }));
   add('［マスタ］にない機器', 'warn', P.filter(function (p) { return p.device && !m.info[p.device]; }));
   add('［マスタ］にない業者', 'warn', P.filter(function (p) {
     return p.supplier && m.suppliers.indexOf(p.supplier) < 0;
@@ -1724,45 +1744,47 @@ function group_(sh, row, col, width, text) {
 // ============================================================
 // 書き出し：機器別一覧
 // ============================================================
-var DEVICE_SEL = 'C3:F3';   // 機器・業者・状態・対象 を選ぶ黄色のセル
+var DEVICE_SEL = 'C3:G3';   // クラウド・機器・業者・状態・対象 を選ぶ黄色のセル
 var MARK_ONLY = TARGET_MARK + 'のみ';
 var MARK_NONE = TARGET_MARK + 'なし';
 
-/** 機器別一覧：機器（＝クラウド）ごとに、レポートを出す人と期間を確かめる作業用の一覧 */
+/** 機器別一覧：クラウド・機器ごとに、レポートを出す人と期間を確かめる作業用の一覧 */
 function writeDeviceList_(ctx, lists) {
   var sh = outputSheet_('device');
   var prev = sh.getLastRow() >= 3 ? sh.getRange(DEVICE_SEL).getDisplayValues()[0] : [];
+  var clOpts = [ALL_OPTION].concat(lists.clouds);
   var devOpts = [ALL_OPTION].concat(lists.devices);
   var supOpts = [ALL_OPTION].concat(lists.suppliers);
   var stOpts = [STATUS_ACTIVE, STATUS_EXIT, ALL_OPTION];
   var mkOpts = [ALL_OPTION, MARK_ONLY, MARK_NONE];
   var pick = function (opts, v, def) { return opts.indexOf(v) >= 0 ? v : def; };
-  var selDev = pick(devOpts, prev[0], ALL_OPTION);
-  var selSup = pick(supOpts, prev[1], ALL_OPTION);
-  var selSt = pick(stOpts, prev[2], STATUS_ACTIVE);
-  var selMk = pick(mkOpts, prev[3], ALL_OPTION);
+  var selCl = pick(clOpts, prev[0], ALL_OPTION);
+  var selDev = pick(devOpts, prev[1], ALL_OPTION);
+  var selSup = pick(supOpts, prev[2], ALL_OPTION);
+  var selSt = pick(stOpts, prev[3], STATUS_ACTIVE);
+  var selMk = pick(mkOpts, prev[4], ALL_OPTION);
 
   resetSheet_(sh);
   sh.setHiddenGridlines(true);
-  [60, 130, 150, 140, 70, 70, 105, 105, 95, 85, 240].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [60, 130, 130, 150, 140, 70, 70, 105, 105, 95, 85, 240].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
   sh.getRange('A1').setValue('機器別一覧').setFontSize(15).setFontWeight('bold').setFontColor(C_TITLE);
-  sh.getRange('C2:F2').setValues([['機器', '業者', '状態', '対象']]).setFontSize(9).setFontWeight('bold')
+  sh.getRange('C2:G2').setValues([['クラウド区分', '機器', '業者', '状態', '対象']]).setFontSize(9).setFontWeight('bold')
     .setFontColor(C_SUB);
-  sh.getRange(DEVICE_SEL).setValues([[selDev, selSup, selSt, selMk]]).setBackground(C_INPUT).setFontWeight('bold')
+  sh.getRange(DEVICE_SEL).setValues([[selCl, selDev, selSup, selSt, selMk]]).setBackground(C_INPUT).setFontWeight('bold')
     .setBorder(true, true, true, true, true, null, '#bf9000', SpreadsheetApp.BorderStyle.SOLID);
   var rule = function (opts) {
     return SpreadsheetApp.newDataValidation().requireValueInList(opts, true).setAllowInvalid(false).build();
   };
-  sh.getRange('C3').setDataValidation(rule(devOpts));
-  sh.getRange('D3').setDataValidation(rule(supOpts));
-  sh.getRange('E3').setDataValidation(rule(stOpts));
-  sh.getRange('F3').setDataValidation(rule(mkOpts));
-  sh.getRange('G2').setValue('← 黄色のセルを選ぶと切り替わります').setFontSize(9).setFontColor(C_SUB);
-  var info = selDev !== ALL_OPTION ? ctx.master.info[selDev] : null;
-  sh.getRange('G3').setValue(info && info.cloud ? 'クラウド：' + info.cloud : '').setFontColor(C_SUB);
+  sh.getRange('C3').setDataValidation(rule(clOpts));
+  sh.getRange('D3').setDataValidation(rule(devOpts));
+  sh.getRange('E3').setDataValidation(rule(supOpts));
+  sh.getRange('F3').setDataValidation(rule(stOpts));
+  sh.getRange('G3').setDataValidation(rule(mkOpts));
+  sh.getRange('H2').setValue('← 黄色のセルを選ぶと切り替わります').setFontSize(9).setFontColor(C_SUB);
 
   var pool = ctx.patients.filter(function (p) {
-    return (selDev === ALL_OPTION || devOf_(p) === selDev) && (selSup === ALL_OPTION || supOf_(p) === selSup);
+    return (selCl === ALL_OPTION || clOf_(p) === selCl) && (selDev === ALL_OPTION || devOf_(p) === selDev) &&
+      (selSup === ALL_OPTION || supOf_(p) === selSup);
   });
   var t = ymd_(ctx.today);
   var mStart = dn_(t.y, t.m, 1);
@@ -1778,35 +1800,38 @@ function writeDeviceList_(ctx, lists) {
   });
   var order = function (arr, v) { var i = arr.indexOf(v); return i < 0 ? 999 : i; };
   list.sort(function (a, b) {
-    return (order(lists.devices, devOf_(a)) - order(lists.devices, devOf_(b))) ||
+    return (order(lists.clouds, clOf_(a)) - order(lists.clouds, clOf_(b))) ||
+      (order(lists.devices, devOf_(a)) - order(lists.devices, devOf_(b))) ||
       (order(lists.suppliers, supOf_(a)) - order(lists.suppliers, supOf_(b))) || compareId_(a, b);
   });
-  var head = ['ID', '名前', '機器', '業者', '状態', '対象', 'レポート開始日', 'レポート終了日', '導入日', '利用期間', '備考'];
+  var head = ['ID', '名前', 'クラウド区分', '機器', '業者', '状態', '対象', 'レポート開始日', 'レポート終了日', '導入日',
+              '利用期間', '備考'];
   ensureSize_(sh, list.length + 10, head.length);
   var rows = list.map(function (p) {
     var until = p.exit !== null && p.exit <= ctx.today ? p.exit : ctx.today;
-    return [p.id, p.name, p.device, p.supplier, p.status, p.target ? TARGET_MARK : '', p.raw.repStart, p.raw.repEnd,
-            p.raw.intro, durationText_(p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : null), p.note];
+    return [p.id, p.name, p.cloud, p.device, p.supplier, p.status, p.target ? TARGET_MARK : '', p.raw.repStart,
+            p.raw.repEnd, p.raw.intro,
+            durationText_(p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : null), p.note];
   });
   var end = table_(sh, 5, 1, head, rows, {
-    formats: [null, null, null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd'], center: [0, 4, 5],
+    formats: [null, null, null, null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd'], center: [0, 5, 6],
     empty: '該当する人はいません' });
   if (rows.length) {
     var bg = list.map(function (p) {
       var line = [];
       for (var i = 0; i < head.length; i++) line.push(p.status === STATUS_EXIT ? C_EXIT_BG : null);
       if (p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart) {
-        line[6] = C_ALERT;
         line[7] = C_ALERT;
+        line[8] = C_ALERT;
       } else if (p.target && (p.repStart === null || p.repEnd === null)) {
-        line[6] = C_TODO;
         line[7] = C_TODO;
+        line[8] = C_TODO;
       }
-      if (p.target && p.status === STATUS_EXIT) line[5] = C_WARN;
+      if (p.target && p.status === STATUS_EXIT) line[6] = C_WARN;
       return line;
     });
     sh.getRange(6, 1, rows.length, head.length).setBackgrounds(bg);
-    sh.getRange(6, 6, rows.length, 1).setFontWeight('bold');
+    sh.getRange(6, 7, rows.length, 1).setFontWeight('bold');
     sh.getRange(end, 1).setValue('水色：対象（○）なのにレポート期間が空欄　赤：終了日が開始日より前　オレンジ：離脱しているのに○')
       .setFontSize(9).setFontColor(C_SUB);
   }
@@ -1921,7 +1946,7 @@ function writeAnonSheet_(ctx) {
     var info = ctx.master.info[p.device];
     var until = p.exit !== null && p.exit <= ctx.today ? p.exit : ctx.today;
     var months = p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : '';
-    return [p.id, p.device, p.supplier, info ? info.cloud : '', p.raw.intro, p.raw.exit, p.status, p.reason,
+    return [p.id, p.device, p.supplier, p.cloud || (info ? info.cloud : ''), p.raw.intro, p.raw.exit, p.status, p.reason,
             months === null ? '' : months, p.raw.repStart, p.raw.repEnd, p.target ? TARGET_MARK : ''];
   });
   ensureSize_(sh, rows.length + 5, head.length);
@@ -1949,7 +1974,7 @@ function writeGuide_() {
     ['h2', '毎日の入力（' + SH.ledger + '）'],
     ['li', '新しい患者さん：メニュー［CPAP管理］→［新規登録フォーム］で登録するか、' + SH.ledger + 'のいちばん下の行に直接入力します。'],
     ['li', '名前を入れると、ID（数字のIDの場合）と状態「利用中」が自動で入ります。'],
-    ['li', '機器を選ぶと、業者が1社だけの機器は業者も自動で入ります。業者が複数ある機器（AirSense10 など）は業者を選んでください。'],
+    ['li', '機器を選ぶと、クラウド区分（AirView・InfoSmart など）が自動で入ります。業者が1社だけの機器は業者も自動で入ります。業者が複数ある機器（AirSense10 など）は業者を選んでください。'],
     ['li', 'やめたとき：離脱日を入れると、状態が自動で「離脱」になり、対象の○が外れて、行がグレーになります。離脱理由も選んでください。'],
     ['li', '日付は「t」で今日、「y」で昨日。「20261001」「R8.10.1」「10/1」でも入ります。セルをダブルクリックするとカレンダーが出ます。'],
     ['li', '一度やめて再開した人は、新しい行で登録し、備考に前のIDを書いてください（導入数・離脱数が正しく数えられます）。'],
@@ -1961,12 +1986,12 @@ function writeGuide_() {
            'メニュー［CPAP管理］→［レポート（期間・対象○）をまとめて入力］。'],
     ['li', '期間は「先月」「今月」「前回の続き（前回の終了日の翌日から）」「日付を指定」から選べ、同時に○も付けられます。' +
            '○だけを付ける・外すこともできます。離脱した人と、絞り込みで隠れている行には入りません。'],
-    ['li', '「' + SH.device + '」タブで「対象」を「○のみ」にすると、機器（クラウド）ごとに、レポートを出す人と期間の一覧になります。'],
+    ['li', '「' + SH.device + '」タブでクラウド区分を選び、「対象」を「○のみ」にすると、そのクラウドでレポートを出す人と期間の一覧になります。'],
     ['li', 'レポートを出し終わったら、メニュー［CPAP管理］→［対象（○）をすべて消す］で○をまとめて空欄に戻します（期間は残ります）。'],
     ['h2', '自動で作られるタブ'],
     ['tbl', SH.dash, 'いまの利用者数、今月・今週の導入と離脱、機器別・業者別の人数、直近の導入・離脱、要確認（入力もれ）、グラフ'],
     ['tbl', SH.month + '／' + SH.week + '／' + SH.year, '期間ごとの導入数・離脱数・純増・期末の利用者数と、機器別・業者別の導入数（新しい順）'],
-    ['tbl', SH.device, '機器・業者・状態を選ぶと、その人たちの一覧（レポート期間つき）が出ます'],
+    ['tbl', SH.device, 'クラウド区分・機器・業者・状態・対象を選ぶと、その人たちの一覧（対象○・レポート期間つき）が出ます'],
     ['tbl', SH.exit, '離脱理由・利用期間・機器ごとの離脱、導入年ごとの継続率（3ヶ月・1年・2年）、離脱した人の一覧'],
     ['tbl', SH.cost, '業者ごと・月ごとの利用台数と、レンタル料の目安（［マスタ］に月額を入れた場合）'],
     ['tbl', SH.anon, '名前と備考を除いた一覧（メニューから作成）。外部での分析やAIに渡すときはこちらを使ってください'],
@@ -2097,7 +2122,7 @@ function importOldData() {
     var msg = '「' + plan.oldSheet.getName() + '」から ' + plan.rows.length + '人を「' + SH.ledger + '」に取り込みます。';
     if (plan.skipped) msg += '\n（すでに' + SH.ledger + 'にいる ' + plan.skipped + '人は飛ばします）';
     if (plan.missingHeads.length) msg += '\n※ 旧シートに見つからない列：' + plan.missingHeads.join('・');
-    msg += '\n\n最終通院日・次回予定日・クラウド区分などの列は新しい表にないため取り込みません（対象の○は取り込みます）。' +
+    msg += '\n\n最終通院日・次回予定日などの列は新しい表にないため取り込みません（対象の○・クラウド区分は取り込みます）。' +
       '\n「' + plan.oldSheet.getName() + '」シートは変更せず、そのまま残します。\n\n実行しますか？';
     if (ui.alert('旧データの取り込み', msg, ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
     var res = runImport_(plan);
@@ -2150,6 +2175,7 @@ function planImport_() {
     var rec = {
       id: id === '' ? '' : (/^\d+$/.test(id) ? Number(id) : id),
       name: name, device: trim_(get('device')), supplier: trim_(String(get('supplier')).split('|')[0]),
+      cloud: trim_(get('cloud')),
       repStart: importDate_(get('repStart'), today), repEnd: importDate_(get('repEnd'), today),
       intro: importDate_(get('intro'), today), exit: importDate_(get('exit'), today),
       target: targetMark_(get('target')), note: note, status: '', reason: trim_(get('reason'))
@@ -2346,7 +2372,7 @@ function getPatientsForBatch() {
   return ctx.patients.map(function (p) {
     var info = ctx.master.info[p.device];
     return {
-      id: p.id, name: p.name, kind: p.device, supplier: p.supplier, cloud: info ? info.cloud : '',
+      id: p.id, name: p.name, kind: p.device, supplier: p.supplier, cloud: p.cloud || (info ? info.cloud : ''),
       status: p.status,
       target: p.target ? 'TRUE' : 'FALSE',
       start_date: ds(p.repStart), end_date: ds(p.repEnd), intro_date: ds(p.intro), last_visit: '',

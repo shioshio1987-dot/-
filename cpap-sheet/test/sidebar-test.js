@@ -18,7 +18,7 @@ const shotDir = process.argv[2] || null;
   gs.setup();
   t.typeIn('患者一覧', 'B2', '既存 太郎');
   t.typeIn('患者一覧', 'C2', 'SBOX');
-  t.typeIn('患者一覧', 'G2', '2026/9/2');
+  t.typeIn('患者一覧', 'I2', '2026/9/2');
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 300, height: 900 } });
@@ -89,9 +89,9 @@ const shotDir = process.argv[2] || null;
     assert.strictEqual(await page.inputValue('#f-device'), '', '機器も選び直してもらう');
     assert.strictEqual(await page.inputValue('#f-supplier'), '');
     assert.strictEqual(await page.textContent('#id-hint'), '空欄なら 3 になります');
-    const row = t.values('患者一覧', 'A3:L3')[0];
-    assert.deepStrictEqual([row[0], row[1], row[2], row[3], row[6], t.ymdOf(row[7]), row[9], row[10]],
-      [2, '新規 花子', 'AirSense10', 'RISEF', '○', '2026/09/20', 'サイドバーから', '利用中'], '対象は最初から○');
+    const row = t.values('患者一覧', 'A3:M3')[0];
+    assert.deepStrictEqual([row[0], row[1], row[2], row[3], row[4], row[7], t.ymdOf(row[8]), row[10], row[11]],
+      [2, '新規 花子', 'AirSense10', 'RISEF', 'AirView', '○', '2026/09/20', 'サイドバーから', '利用中'], '対象は最初から○');
   });
   await step('同じ名前なら確認が出て、「登録する」で登録できる', async () => {
     await page.fill('#f-name', '既存 太郎');
@@ -111,7 +111,7 @@ const shotDir = process.argv[2] || null;
     await page.uncheck('#f-target');
     await page.click('#reg-btn');
     await page.waitForSelector('#reg-msg.ok');
-    assert.deepStrictEqual([t.values('患者一覧', 'B5')[0][0], t.values('患者一覧', 'G5')[0][0]], ['対象外 三郎', '']);
+    assert.deepStrictEqual([t.values('患者一覧', 'B5')[0][0], t.values('患者一覧', 'H5')[0][0]], ['対象外 三郎', '']);
     assert.strictEqual(await page.isChecked('#f-target'), true);
   });
   await step('業者が複数ある機器に変えると、前の業者は引き継がない', async () => {
@@ -154,7 +154,7 @@ const shotDir = process.argv[2] || null;
     await page.click('#apply-btn');
     await page.waitForSelector('#rep-msg.ok');
     assert.ok((await page.textContent('#rep-msg')).includes('3人（対象に○も付けました）'));
-    assert.deepStrictEqual(t.display('患者一覧', 'E2:G4'), [
+    assert.deepStrictEqual(t.display('患者一覧', 'F2:H4'), [
       ['2026/09/01', '2026/09/30', '○'], ['2026/09/01', '2026/09/30', '○'], ['2026/09/01', '2026/09/30', '○']]);
   });
   await step('日付欄に触るとその選択肢が選ばれる／前後が逆ならエラー', async () => {
@@ -171,23 +171,23 @@ const shotDir = process.argv[2] || null;
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'sidebar-report.png'), fullPage: true });
     await page.click('#rep-msg button.primary');
     await page.waitForSelector('#rep-msg.ok');
-    assert.deepStrictEqual(t.display('患者一覧', 'E2:F2'), [['', '']]);
+    assert.deepStrictEqual(t.display('患者一覧', 'F2:G2'), [['', '']]);
   });
   await step('対象（○）だけを外す・付ける・すべて消す', async () => {
     t.select('患者一覧', ['A3:A4']);
     await page.click('#mark-off-btn');
     await page.waitForSelector('#mark-msg.ok');
-    assert.deepStrictEqual(t.values('患者一覧', 'G2:G4'), [['○'], [''], ['']]);
+    assert.deepStrictEqual(t.values('患者一覧', 'H2:H4'), [['○'], [''], ['']]);
     await page.click('#mark-on-btn');
     await page.waitForFunction(() => document.getElementById('mark-msg').textContent.includes('付けました'));
-    assert.deepStrictEqual(t.values('患者一覧', 'G2:G4'), [['○'], ['○'], ['○']]);
+    assert.deepStrictEqual(t.values('患者一覧', 'H2:H4'), [['○'], ['○'], ['○']]);
     await page.click('#mark-clear-btn');
     await page.waitForSelector('#mark-msg.ask');
     assert.ok((await page.textContent('#mark-msg')).includes('いま 3人に○'));
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'sidebar-marks.png'), fullPage: true });
     await page.click('#mark-msg button.primary');
     await page.waitForSelector('#mark-msg.ok');
-    assert.deepStrictEqual(t.values('患者一覧', 'G2:G5'), [[''], [''], [''], ['']]);
+    assert.deepStrictEqual(t.values('患者一覧', 'H2:H5'), [[''], [''], [''], ['']]);
   });
   await step('別のタブを選んでいるときは案内を出す', async () => {
     t.select('ダッシュボード', ['A1']);
