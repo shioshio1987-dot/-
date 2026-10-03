@@ -59,15 +59,25 @@ var LEDGER = [
           'マスタにクラウドがない機器のときだけ、手で入れてください。' },
   { key: 'repStart', head: 'レポート開始日', width: 105, date: true,
     note: 'レポートを出す期間の初日です。\n' +
-          'まとめて入れるときは、行を選んでメニュー［CPAP管理］→［レポート期間をまとめて入力］。' },
-  { key: 'repEnd', head: 'レポート終了日', width: 105, date: true, note: 'レポートを出す期間の最終日です。' },
+          '最終通院日を入れると、同じ日付が自動で入ります（通院のたびに上書き）。\n' +
+          'まとめて入れるときは、行を選んでメニュー［CPAP管理］→［レポート（期間・対象○）をまとめて入力］。' },
+  { key: 'repEnd', head: 'レポート終了日', width: 105, date: true,
+    note: 'レポートを出す期間の最終日です。\n' +
+          '最終通院日を入れると「=TODAY()-1」の式が入り、いつも昨日の日付を表示します。\n' +
+          '手で日付を入れて固定してもかまいません（次に最終通院日を入れると式に戻ります）。' },
   { key: 'target', head: '対象', width: 50,
     note: 'レポートを出す人に「○」を入れます（何を入れても○になります。×・0 は空欄に）。\n' +
           '空欄＝対象外です。離脱日を入れると空欄に戻ります。\n' +
           'まとめて付ける・外す：行を選んでメニュー［CPAP管理］→［レポート（期間・対象○）をまとめて入力］\n' +
           'すべて消す：メニュー［CPAP管理］→［対象（○）をすべて消す］' },
   { key: 'intro', head: '導入日', width: 100, date: true,
-    note: 'CPAPを始めた日です。月別・週別の「導入数」はこの日で数えます。' },
+    note: 'CPAPを始めた日です。月別・週別の「導入数」はこの日で数えます。\n' +
+          '最終通院日・レポート開始日・レポート終了日が空なら、導入日をもとに自動で入ります。' },
+  { key: 'visit', head: '最終通院日', width: 100, date: true,
+    note: '最後に通院した日です。入れると、\n' +
+          '・レポート開始日に同じ日付（通院のたびに上書き）\n' +
+          '・レポート終了日に「=TODAY()-1」の式（いつも昨日）\n' +
+          'が入り、レポート期間が「前回の通院日〜昨日」になります。' },
   { key: 'exit', head: '離脱日', width: 100, date: true,
     note: 'CPAPをやめた日です。入れると「状態」が自動で「離脱」になります。\n' +
           '未来の日付なら、その日になったときに切り替わります。' },
@@ -77,7 +87,8 @@ var LEDGER = [
   { key: 'reason', head: '離脱理由', width: 130,
     note: '離脱したときに選びます（離脱分析タブで使います）。\n候補は［マスタ］タブで変えられます。' }
 ];
-var DATE_KEYS = ['repStart', 'repEnd', 'intro', 'exit'];
+var DATE_KEYS = ['repStart', 'repEnd', 'intro', 'visit', 'exit'];
+var END_FORMULA = '=TODAY()-1';   // レポート終了日の「いつも昨日」の式（旧バージョンと同じ）
 var LEDGER_MIN_ROWS = 2000;   // 患者一覧の最初の行数（足りなくなって下に行を足したら、次の集計で入力規則も広がる）
 var HEAD = {};
 LEDGER.forEach(function (c) { HEAD[c.key] = c.head; });
@@ -119,6 +130,7 @@ var OLD_HEADERS = {
   repEnd:   ['終了日', 'レポート終了日'],
   target:   ['対象'],
   intro:    ['導入日'],
+  visit:    ['最終通院日'],
   exit:     ['離脱日'],
   note:     ['その他', '備考'],
   status:   ['状態'],
@@ -463,7 +475,7 @@ function ledgerFormatRules_(sh, c) {
   add('=AND(ISNUMBER(' + L('exit') + '2),ISNUMBER(' + L('intro') + '2),' + L('exit') + '2<' + L('intro') + '2)',
     [col('exit')], C_ALERT, C_ALERT_FONT);
   add('=AND(ISNUMBER(' + L('repStart') + '2),ISNUMBER(' + L('repEnd') + '2),' +
-    L('repEnd') + '2<' + L('repStart') + '2)', [col('repStart'), col('repEnd')], C_ALERT, C_ALERT_FONT);
+    L('repEnd') + '2<' + L('repStart') + '2-1)', [col('repStart'), col('repEnd')], C_ALERT, C_ALERT_FONT);
   // オレンジ：確認してほしいもの
   add('=AND(' + L('status') + '2="' + STATUS_EXIT + '",' + L('target') + '2<>"")', [col('target')], C_WARN, C_WARN_FONT);
   add('=AND(' + L('status') + '2="' + STATUS_EXIT + '",' + L('exit') + '2="")', [col('exit')], C_WARN, C_WARN_FONT);
@@ -543,6 +555,10 @@ function onLedgerEdit_(e, sh) {
     var put = function (k, v) {
       r[c[k] - 1] = v;
       sh.getRange(row, c[k]).setValue(v);
+    };
+    var putEndFormula = function () {
+      sh.getRange(row, c.repEnd).setFormula(END_FORMULA);
+      r[c.repEnd - 1] = dnToCellDate_(today - 1);
     };
 
     // 1) 日付：t／y／8桁／和暦などを本物の日付に直す
@@ -628,7 +644,22 @@ function onLedgerEdit_(e, sh) {
     if (touched('repStart') || touched('repEnd')) {
       var s = dnOf_(get('repStart'), today);
       var en = dnOf_(get('repEnd'), today);
-      if (s !== null && en !== null && en < s) msgs.push(row + '行目：レポート終了日が開始日より前になっています。');
+      if (s !== null && en !== null && en < s - 1) msgs.push(row + '行目：レポート終了日が開始日より前になっています。');
+    }
+
+    // 6) 最終通院日 → レポート開始日に同じ日、レポート終了日は「いつも昨日」の式（旧バージョンと同じ）
+    //    同じ操作でレポート期間も入れた（貼り付けなど）ときは、そちらを優先する
+    var visitDn = dnOf_(get('visit'), today);
+    if (touched('visit') && visitDn !== null) {
+      if (!touched('repStart')) put('repStart', dnToCellDate_(visitDn));
+      if (!touched('repEnd')) putEndFormula();
+    }
+    // 7) 導入日 → 最終通院日・レポート期間が空なら、導入日をもとに入れる
+    var introDn = dnOf_(get('intro'), today);
+    if (touched('intro') && introDn !== null && !touched('visit')) {
+      if (get('visit') === '') put('visit', dnToCellDate_(introDn));
+      if (get('repStart') === '' && !touched('repStart')) put('repStart', dnToCellDate_(introDn));
+      if (get('repEnd') === '' && !touched('repEnd')) putEndFormula();
     }
   });
 
@@ -703,12 +734,16 @@ function registerPatient(form) {
   var device = trim_(form.device);
   var supplier = trim_(form.supplier);
   var intro = isoToDn_(form.intro);
+  var visit = isoToDn_(form.visit);
   var repStart = isoToDn_(form.repStart);
   var repEnd = isoToDn_(form.repEnd);
   if (!name) throw new Error('名前を入れてください。');
   if (!device) throw new Error('機器を選んでください。');
   if (!supplier) throw new Error('業者を選んでください。');
   if (intro === null) throw new Error('導入日を入れてください。');
+  if (visit === null) visit = intro;
+  if (visit < intro) throw new Error('最終通院日が導入日より前になっています。');
+  if (visit > todayDn_()) throw new Error('最終通院日が今日より後の日付になっています。');
   if ((repStart === null) !== (repEnd === null)) throw new Error('レポート期間は開始日と終了日の両方を入れてください。');
   if (repStart !== null && repEnd < repStart) throw new Error('レポート終了日が開始日より前になっています。');
   var master = readMaster_();
@@ -745,10 +780,10 @@ function registerPatient(form) {
     var rec = {
       id: /^\d+$/.test(id) ? Number(id) : id,
       name: name, device: device, supplier: supplier, cloud: cloudOf_(master, device),
-      repStart: repStart === null ? '' : dnToCellDate_(repStart),
-      repEnd: repEnd === null ? '' : dnToCellDate_(repEnd),
+      repStart: dnToCellDate_(repStart === null ? visit : repStart),
+      repEnd: repEnd === null ? END_FORMULA : dnToCellDate_(repEnd),
       target: form.target === false ? '' : TARGET_MARK,
-      intro: dnToCellDate_(intro), exit: '', note: trim_(form.note),
+      intro: dnToCellDate_(intro), visit: dnToCellDate_(visit), exit: '', note: trim_(form.note),
       status: STATUS_ACTIVE, reason: ''
     };
     LEDGER.forEach(function (col) {
@@ -800,6 +835,13 @@ function applyReportPeriod(req) {
 
   var done = 0;
   var skipped = [];
+  // 前回の続き：終了日が「いつも昨日」の式（最終通院日から入ったもの）の人は、決まった前回の終了日がないのでそのままにする
+  var moving = {};
+  if (req.mode === 'continue') {
+    var r0 = sel.targets[0].row;
+    var fs = sh.getRange(r0, c.repEnd, sel.targets[sel.targets.length - 1].row - r0 + 1, 1).getFormulas();
+    sel.targets.forEach(function (t) { if (isEndFormula_(fs[t.row - r0][0])) moving[t.row] = true; });
+  }
   sel.targets.forEach(function (t) {
     if (req.mode === 'clear') {
       sh.getRange(t.row, c.repStart).clearContent();
@@ -809,6 +851,7 @@ function applyReportPeriod(req) {
     }
     var s = start;
     if (req.mode === 'continue') {
+      if (moving[t.row]) { skipped.push(t.row + '行目（終了日が「いつも昨日」の式です）'); return; }
       var prev = dnOf_(t.values[c.repEnd - 1], today);
       s = prev !== null ? prev + 1 : dnOf_(t.values[c.intro - 1], today);
       if (s === null) { skipped.push(t.row + '行目（前回の終了日も導入日もありません）'); return; }
@@ -1331,9 +1374,12 @@ function dataChecks_(ctx) {
     return p.intro !== null && p.exit !== null && p.exit < p.intro;
   }));
   add('レポート終了日が開始日より前', 'error', P.filter(function (p) {
-    return p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart;
+    return p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart - 1;   // 通院した当日（終了日＝昨日）はOK
   }));
   add('名前が空欄の行（ほかの欄には入力あり）', 'error', ctx.orphans);
+  add('最終通院日が導入日より前', 'warn', P.filter(function (p) {
+    return p.visit !== null && p.intro !== null && p.visit < p.intro;
+  }));
   add('対象（○）なのにレポート期間が空欄', 'warn', P.filter(function (p) {
     return p.target && (p.repStart === null || p.repEnd === null);
   }));
@@ -1766,7 +1812,7 @@ function writeDeviceList_(ctx, lists) {
 
   resetSheet_(sh);
   sh.setHiddenGridlines(true);
-  [60, 130, 130, 150, 140, 70, 70, 105, 105, 95, 85, 240].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [60, 130, 130, 150, 140, 70, 70, 105, 105, 95, 95, 85, 240].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
   sh.getRange('A1').setValue('機器別一覧').setFontSize(15).setFontWeight('bold').setFontColor(C_TITLE);
   sh.getRange('C2:G2').setValues([['クラウド区分', '機器', '業者', '状態', '対象']]).setFontSize(9).setFontWeight('bold')
     .setFontColor(C_SUB);
@@ -1805,22 +1851,23 @@ function writeDeviceList_(ctx, lists) {
       (order(lists.suppliers, supOf_(a)) - order(lists.suppliers, supOf_(b))) || compareId_(a, b);
   });
   var head = ['ID', '名前', 'クラウド区分', '機器', '業者', '状態', '対象', 'レポート開始日', 'レポート終了日', '導入日',
-              '利用期間', '備考'];
+              '最終通院日', '利用期間', '備考'];
   ensureSize_(sh, list.length + 10, head.length);
   var rows = list.map(function (p) {
     var until = p.exit !== null && p.exit <= ctx.today ? p.exit : ctx.today;
     return [p.id, p.name, p.cloud, p.device, p.supplier, p.status, p.target ? TARGET_MARK : '', p.raw.repStart,
-            p.raw.repEnd, p.raw.intro,
+            p.raw.repEnd, p.raw.intro, p.raw.visit,
             durationText_(p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : null), p.note];
   });
   var end = table_(sh, 5, 1, head, rows, {
-    formats: [null, null, null, null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd'], center: [0, 5, 6],
+    formats: [null, null, null, null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd'],
+    center: [0, 5, 6],
     empty: '該当する人はいません' });
   if (rows.length) {
     var bg = list.map(function (p) {
       var line = [];
       for (var i = 0; i < head.length; i++) line.push(p.status === STATUS_EXIT ? C_EXIT_BG : null);
-      if (p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart) {
+      if (p.repStart !== null && p.repEnd !== null && p.repEnd < p.repStart - 1) {
         line[7] = C_ALERT;
         line[8] = C_ALERT;
       } else if (p.target && (p.repStart === null || p.repEnd === null)) {
@@ -1936,7 +1983,7 @@ function writeCostSheet_(ctx) {
 function writeAnonSheet_(ctx) {
   var sh = outputSheet_('anon');
   resetSheet_(sh);
-  var head = ['ID', '機器', '業者', 'クラウド', '導入日', '離脱日', '状態', '離脱理由', '利用月数',
+  var head = ['ID', '機器', '業者', 'クラウド', '導入日', '最終通院日', '離脱日', '状態', '離脱理由', '利用月数',
               'レポート開始日', 'レポート終了日', '対象'];
   sh.getRange('A1').setValue('匿名データ（名前・備考を除いた一覧）').setFontSize(14).setFontWeight('bold')
     .setFontColor(C_TITLE);
@@ -1946,15 +1993,15 @@ function writeAnonSheet_(ctx) {
     var info = ctx.master.info[p.device];
     var until = p.exit !== null && p.exit <= ctx.today ? p.exit : ctx.today;
     var months = p.intro !== null && p.intro <= until ? monthsBetween_(p.intro, until) : '';
-    return [p.id, p.device, p.supplier, p.cloud || (info ? info.cloud : ''), p.raw.intro, p.raw.exit, p.status, p.reason,
+    return [p.id, p.device, p.supplier, p.cloud || (info ? info.cloud : ''), p.raw.intro, p.raw.visit, p.raw.exit, p.status, p.reason,
             months === null ? '' : months, p.raw.repStart, p.raw.repEnd, p.target ? TARGET_MARK : ''];
   });
   ensureSize_(sh, rows.length + 5, head.length);
   table_(sh, 4, 1, head, rows, {
-    formats: [null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', null, null, '#,##0', 'yyyy/mm/dd', 'yyyy/mm/dd'],
-    center: [11], empty: '患者がまだいません' });
+    formats: [null, null, null, null, 'yyyy/mm/dd', 'yyyy/mm/dd', 'yyyy/mm/dd', null, null, '#,##0', 'yyyy/mm/dd', 'yyyy/mm/dd'],
+    center: [12], empty: '患者がまだいません' });
   sh.setFrozenRows(4);
-  [60, 150, 140, 130, 95, 95, 60, 120, 70, 105, 105, 50].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [60, 150, 140, 130, 95, 95, 95, 60, 120, 70, 105, 105, 50].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
 }
 
 
@@ -1976,11 +2023,13 @@ function writeGuide_() {
     ['li', '名前を入れると、ID（数字のIDの場合）と状態「利用中」が自動で入ります。'],
     ['li', '機器を選ぶと、クラウド区分（AirView・InfoSmart など）が自動で入ります。業者が1社だけの機器は業者も自動で入ります。業者が複数ある機器（AirSense10 など）は業者を選んでください。'],
     ['li', 'やめたとき：離脱日を入れると、状態が自動で「離脱」になり、対象の○が外れて、行がグレーになります。離脱理由も選んでください。'],
+    ['li', '通院したら「最終通院日」を入れます。レポート開始日に同じ日付、レポート終了日に「いつも昨日」の式が入り、' +
+           'レポート期間が「前回の通院日〜昨日」になります（通院した当日は「開始日＝今日・終了日＝昨日」で、翌日から期間に入ります）。'],
     ['li', '日付は「t」で今日、「y」で昨日。「20261001」「R8.10.1」「10/1」でも入ります。セルをダブルクリックするとカレンダーが出ます。'],
     ['li', '一度やめて再開した人は、新しい行で登録し、備考に前のIDを書いてください（導入数・離脱数が正しく数えられます）。'],
     ['li', 'やめた人の行は削除せずに残してください（過去の集計が変わってしまうため）。'],
     ['h2', 'レポートを出すとき（対象・レポート期間）'],
-    ['li', 'レポートを出す人の「対象」に「○」を入れ、「レポート開始日」「レポート終了日」に期間を入れます。' +
+    ['li', 'レポートを出す人の「対象」に「○」を入れます。期間はふだんは最終通院日から自動で入ります（前回の通院日〜昨日）。' +
            '対象の欄は何を入れても○になります（×・0 は空欄に）。新規登録した人は最初から○です。'],
     ['li', 'まとめて入れるとき：' + SH.ledger + 'で行を選び（見出しの▼で機器などを絞り込んでから選ぶと便利）、' +
            'メニュー［CPAP管理］→［レポート（期間・対象○）をまとめて入力］。'],
@@ -2122,7 +2171,7 @@ function importOldData() {
     var msg = '「' + plan.oldSheet.getName() + '」から ' + plan.rows.length + '人を「' + SH.ledger + '」に取り込みます。';
     if (plan.skipped) msg += '\n（すでに' + SH.ledger + 'にいる ' + plan.skipped + '人は飛ばします）';
     if (plan.missingHeads.length) msg += '\n※ 旧シートに見つからない列：' + plan.missingHeads.join('・');
-    msg += '\n\n最終通院日・次回予定日などの列は新しい表にないため取り込みません（対象の○・クラウド区分は取り込みます）。' +
+    msg += '\n\n次回予定日・自動計算の列などは新しい表にないため取り込みません（最終通院日・対象の○・クラウド区分は取り込みます）。' +
       '\n「' + plan.oldSheet.getName() + '」シートは変更せず、そのまま残します。\n\n実行しますか？';
     if (ui.alert('旧データの取り込み', msg, ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
     var res = runImport_(plan);
@@ -2136,7 +2185,9 @@ function planImport_() {
   initTz_();
   var plan = { oldSheet: findOldSheet_(OLD_ALL_NAMES), rows: [], skipped: 0, missingHeads: [] };
   if (!plan.oldSheet) return plan;
-  var data = plan.oldSheet.getDataRange().getValues();
+  var dataRange = plan.oldSheet.getDataRange();
+  var data = dataRange.getValues();
+  var formulas = dataRange.getFormulas();
   if (data.length < 2) return plan;
   var head = data[0].map(function (h) { return String(h).replace(/[\s　]/g, ''); });
   var idx = {};
@@ -2176,7 +2227,9 @@ function planImport_() {
       id: id === '' ? '' : (/^\d+$/.test(id) ? Number(id) : id),
       name: name, device: trim_(get('device')), supplier: trim_(String(get('supplier')).split('|')[0]),
       cloud: trim_(get('cloud')),
-      repStart: importDate_(get('repStart'), today), repEnd: importDate_(get('repEnd'), today),
+      repStart: importDate_(get('repStart'), today),
+      repEnd: idx.repEnd >= 0 && isEndFormula_(formulas[i][idx.repEnd]) ? END_FORMULA : importDate_(get('repEnd'), today),
+      visit: importDate_(get('visit'), today),
       intro: importDate_(get('intro'), today), exit: importDate_(get('exit'), today),
       target: targetMark_(get('target')), note: note, status: '', reason: trim_(get('reason'))
     };
@@ -2313,6 +2366,11 @@ function importOldMaster_(rows) {
   return res;
 }
 
+/** 旧バージョンの終了日の「いつも昨日」の式（=TODAY()-1）か */
+function isEndFormula_(f) {
+  return /^=\s*TODAY\(\)\s*-\s*1\s*$/i.test(String(f || ''));
+}
+
 function importDate_(v, today) {
   if (v instanceof Date || v === '' || v === null) return v === null ? '' : v;
   var dn = parseDateText_(v, today);
@@ -2365,6 +2423,14 @@ function hideOldTabs() {
 // ============================================================
 // 外部連携用（旧バージョンと同じ形で返す）
 // ============================================================
+/** 最終通院日から何ヶ月目か（日にちは見ず、暦の月で数える。旧バージョンの「未通院月数」と同じ） */
+function monthsSinceVisit_(visit, today) {
+  if (visit === null) return '';
+  var v = ymd_(visit);
+  var t = ymd_(today);
+  return (t.y - v.y) * 12 + (t.m - v.m);
+}
+
 /** 患者の一覧を配列で返す（旧バージョンと同じ形）。target は対象に○が付いている人が 'TRUE'。 */
 function getPatientsForBatch() {
   var ctx = loadContext_();
@@ -2375,8 +2441,9 @@ function getPatientsForBatch() {
       id: p.id, name: p.name, kind: p.device, supplier: p.supplier, cloud: p.cloud || (info ? info.cloud : ''),
       status: p.status,
       target: p.target ? 'TRUE' : 'FALSE',
-      start_date: ds(p.repStart), end_date: ds(p.repEnd), intro_date: ds(p.intro), last_visit: '',
-      exit_date: ds(p.exit), next_due: '', days_to_next: '', months_no_visit: '', other: p.note, reason: p.reason
+      start_date: ds(p.repStart), end_date: ds(p.repEnd), intro_date: ds(p.intro), last_visit: ds(p.visit),
+      exit_date: ds(p.exit), next_due: '', days_to_next: '', months_no_visit: monthsSinceVisit_(p.visit, ctx.today),
+      other: p.note, reason: p.reason
     };
   });
 }

@@ -89,9 +89,11 @@ const shotDir = process.argv[2] || null;
     assert.strictEqual(await page.inputValue('#f-device'), '', '機器も選び直してもらう');
     assert.strictEqual(await page.inputValue('#f-supplier'), '');
     assert.strictEqual(await page.textContent('#id-hint'), '空欄なら 3 になります');
-    const row = t.values('患者一覧', 'A3:M3')[0];
-    assert.deepStrictEqual([row[0], row[1], row[2], row[3], row[4], row[7], t.ymdOf(row[8]), row[10], row[11]],
+    const row = t.values('患者一覧', 'A3:N3')[0];
+    assert.deepStrictEqual([row[0], row[1], row[2], row[3], row[4], row[7], t.ymdOf(row[8]), row[11], row[12]],
       [2, '新規 花子', 'AirSense10', 'RISEF', 'AirView', '○', '2026/09/20', 'サイドバーから', '利用中'], '対象は最初から○');
+    assert.deepStrictEqual([t.ymdOf(row[9]), t.ymdOf(row[5]), t.ymdOf(row[6])], ['2026/09/20', '2026/09/20', '2026/09/30'],
+      '最終通院日が空なら導入日、期間は最終通院日〜昨日');
   });
   await step('同じ名前なら確認が出て、「登録する」で登録できる', async () => {
     await page.fill('#f-name', '既存 太郎');

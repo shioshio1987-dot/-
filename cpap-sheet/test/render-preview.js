@@ -49,19 +49,21 @@ for (let i = 0; i < 260; i++) {
   const rep = exit === null && r() < 0.7;
   const d = ms => (ms === null ? '' : t.cellDate(...ymd(ms)));
   const mark = exit === null && r() < 0.6 ? '○' : '';
+  // 通院している人：最終通院日（7〜9月）→ レポート開始日＝最終通院日、終了日＝「いつも昨日」の式
+  const visit = rep ? Math.max(intro, Date.UTC(2026, 6, 1) + Math.floor(r() * 92) * DAY) : null;
   rows.push([i + 1, FAMILY[Math.floor(r() * FAMILY.length)] + ' ' + GIVEN[Math.floor(r() * GIVEN.length)], c[0], c[1], '',
-    rep ? d(Date.UTC(2026, 8, 1)) : '', rep ? d(Date.UTC(2026, 8, 30)) : '', mark, d(intro), d(exit),
+    d(visit), rep ? '=TODAY()-1' : '', mark, d(intro), d(visit), d(exit),
     r() < 0.08 ? '夜間の装着が不安定' : '', '', reason]);
 }
 rows.sort((a, b) => a[8] - b[8]).forEach((row, i) => { row[0] = i + 1; });
 t.grow('患者一覧', rows.length + 1);
-t.sheet('患者一覧').getRange(2, 1, rows.length, 13).setValues(rows);
+t.sheet('患者一覧').getRange(2, 1, rows.length, 14).setValues(rows);
 // 確認用に、わざと入力もれ・矛盾をいくつか入れる
 const sh = t.sheet('患者一覧');
 sh.getRange('D30').setValue('');
 sh.getRange('A41').setValue(39);
-sh.getRange('J52').setValue(t.cellDate(2023, 1, 5));
-sh.getRange('M60').setValue('');
+sh.getRange('K52').setValue(t.cellDate(2023, 1, 5));
+sh.getRange('N60').setValue('');
 // マスタに架空の料金
 const m = t.sheet('マスタ');
 const mv = m.getRange(5, 1, 9, 7).getValues();
@@ -83,10 +85,8 @@ function cfEval(formula, sheet, row) {
   const next = () => toks[i++];
   const colNum = s => s.replace(/\$/g, '').split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
   const val = (c, rr) => {
-    const cell = sheet._cell(rr, c);
-    if (!cell || cell.v === undefined) return '';
-    if (cell.v && typeof cell.v === 'object') return cell.v.__date;
-    return cell.v;
+    const v = sheet._getValue(rr, c);   // 式（=TODAY()-1 など）は計算した値
+    return v instanceof Date ? t.env.internals.dateToSerial(v, t.ss._tz) : v;
   };
   function primary() {
     const tk = next();
@@ -241,6 +241,8 @@ function renderSheet(sheet) {
         if (m2) {
           const n = Number(sheet._getValue(Number(m2[1]), 2)) || 0;
           text = `<div class="spark" style="width:${Math.round(100 * n / Number(m2[2]))}%"></div>`;
+        } else if (v instanceof Date) {
+          text = formatDate(v, t.ss._tz, 'yyyy/MM/dd');   // =TODAY()-1 など：スプレッドシートと同じく計算した日付を表示
         } else text = `<span class="f">${esc(cell.f)}</span>`;
       } else if (v instanceof Date) {
         text = formatDate(v, t.ss._tz, 'yyyy/MM/dd');
@@ -271,7 +273,7 @@ function renderSheet(sheet) {
       if (borders.has(key)) st.push('border:1px solid #c9c9c9');
       if (overflow) st.push('position:relative;overflow:visible');
       if (c === sheet._frozenCols) st.push('border-right:2px solid #999');
-      const dv = cell.dv && cell.dv.crit.type === 'list' && cell.dv.crit.list.length < 40 && (sheet._name !== '患者一覧' || rr < 8) ? '<span class="dd">▾</span>' : '';
+      const dv = cell.dv && cell.dv.crit.type === 'list' && cell.dv.crit.list.length < 40 && sheet._name !== '患者一覧' ? '<span class="dd">▾</span>' : '';
       html += `<td${span} style="${st.join(';')}">${text}${dv}</td>`;
     }
     html += '</tr>';

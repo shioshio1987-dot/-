@@ -28,8 +28,8 @@ function fakeDateClass(fixedMs) {
 function load(opts) {
   opts = opts || {};
   const scriptTz = process.env.TZ || 'Asia/Tokyo';
-  const env = createEnv({ scriptTz, sheetTz: opts.sheetTz || scriptTz });
   const nowMs = new Date(opts.now || '2026-10-01T10:00:00+09:00').getTime();
+  const env = createEnv({ scriptTz, sheetTz: opts.sheetTz || scriptTz, nowMs });
   const sandbox = Object.assign({}, env.globals, { Date: fakeDateClass(nowMs) });
   const ctx = vm.createContext(sandbox);
   vm.runInContext(CODE, ctx, { filename: 'Code.gs' });

@@ -299,7 +299,16 @@ class Sheet {
   _getValue(r, c) {
     const cell = this._cell(r, c);
     if (!cell) return '';
-    if (cell.f) return cell.cached !== undefined ? cell.cached : '';
+    if (cell.f) {
+      // =TODAY() / =TODAY()-n はスプレッドシートと同じく、シートのタイムゾーンの今日から計算する
+      const m = /^=\s*TODAY\(\)\s*(?:-\s*(\d+))?\s*$/i.exec(cell.f);
+      if (m) {
+        const p = tzParts(new Date(this._ss._nowMs), this._ss._tz);
+        const serial = (Date.UTC(p.y, p.m - 1, p.d) - SERIAL_EPOCH) / 86400000 - (m[1] ? Number(m[1]) : 0);
+        return serialToDate(serial, this._ss._tz);
+      }
+      return cell.cached !== undefined ? cell.cached : '';
+    }
     if (cell.v === undefined) return '';
     if (cell.v && typeof cell.v === 'object' && '__date' in cell.v) return serialToDate(cell.v.__date, this._ss._tz);
     return cell.v;
@@ -518,6 +527,7 @@ function createEnv(opts) {
   opts = opts || {};
   const scriptTz = opts.scriptTz || 'Asia/Tokyo';
   const ss = new Spreadsheet(null, opts.sheetTz || scriptTz);
+  ss._nowMs = opts.nowMs || Date.now();
   const state = {
     ss, alerts: [], responses: [], sidebars: [], menus: [], triggers: [], props: {},
     locks: { script: false, document: false }, now: opts.now || null

@@ -76,7 +76,10 @@
       <button type="button" id="intro-today">今日</button>
     </div>
 
-    <label>レポート期間<span class="hint">あとで入れてもかまいません</span></label>
+    <label for="f-visit">最終通院日<span class="hint">空欄なら導入日と同じ</span></label>
+    <input type="date" id="f-visit">
+
+    <label>レポート期間<span class="hint">空欄なら「最終通院日〜昨日」（毎日のびます）</span></label>
     <div class="period">
       <input type="date" id="f-repStart" aria-label="レポート開始日">
       <span>〜</span>
@@ -113,7 +116,7 @@
         </div>
         <div class="choice">
           <label><input type="radio" name="mode" value="continue"> 前回の続き</label>
-          <small>前回のレポート終了日の翌日から（初めての人は導入日から）</small>
+          <small>前回のレポート終了日の翌日から（初めての人は導入日から。終了日が「いつも昨日」の式の人はそのまま）</small>
           <div class="period"><span class="note">終了日</span><span></span><input type="date" id="cont-end" aria-label="終了日"></div>
         </div>
         <div class="choice">
@@ -247,6 +250,7 @@
         device: $('f-device').value,
         supplier: $('f-supplier').value,
         intro: $('f-intro').value,
+        visit: $('f-visit').value,
         repStart: $('f-repStart').value,
         repEnd: $('f-repEnd').value,
         note: $('f-note').value.trim(),
@@ -267,7 +271,7 @@
           return;
         }
         show(msg, 'ok', res.message);
-        ['f-id', 'f-name', 'f-device', 'f-repStart', 'f-repEnd', 'f-note'].forEach(function (id) { $(id).value = ''; });
+        ['f-id', 'f-name', 'f-device', 'f-visit', 'f-repStart', 'f-repEnd', 'f-note'].forEach(function (id) { $(id).value = ''; });
         $('f-target').checked = true;
         updateSuppliers();
         if (DATA) {
