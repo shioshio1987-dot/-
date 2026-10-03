@@ -15,6 +15,7 @@ if (!scenario) {
     ['Asia/Tokyo', 'main', ''],
     ['Asia/Tokyo', 'import', ''],
     ['Asia/Tokyo', 'upgrade', ''],
+    ['Asia/Tokyo', 'refill', ''],
     ['Asia/Tokyo', 'collision', ''],
     ['Asia/Tokyo', 'big', ''],
     ['America/New_York', 'tz', 'Asia/Tokyo'],          // スクリプトは NY、シートは東京
@@ -960,6 +961,81 @@ function scenarioUpgrade() {
 }
 
 // =====================================================================
+// シナリオ：最終通院日の列がない版で旧ALLを取り込みずみ → セットアップで最終通院日を入れる
+// =====================================================================
+function scenarioRefill() {
+  const t = load({ sheetTz: sheetTzArg });
+  const gs = t.gs;
+  const d = (y, m, dd) => t.cellDate(y, m, dd);
+  const all = t.ss.insertSheet('ALL');
+  all.getRange(1, 1, 1, 8).setValues([['管理ID', '名前', 'CPAP機種', '仕入先', '導入日', '最終通院日', '開始日', '終了日']]);
+  all.getRange(2, 1, 5, 8).setValues([
+    [1, '前版 太郎', 'SBOX', 'RISEF', d(2025, 1, 10), d(2026, 9, 5), d(2026, 9, 5), ''],
+    [2, '前版 花子', 'AirMini', 'RISEF', d(2024, 3, 3), d(2026, 8, 20), d(2026, 8, 20), ''],
+    [3, '別人 三郎', 'SBOX', 'RISEF', d(2025, 2, 2), d(2026, 9, 9), d(2026, 9, 9), ''],
+    [4, '前版 四郎', 'SBOX', 'RISEF', d(2025, 4, 4), '', '', ''],
+    [5, '新規 五郎', 'SBOX', 'RISEF', d(2026, 9, 1), d(2026, 9, 1), d(2026, 9, 1), '']]);
+  ['H2', 'H3', 'H4', 'H6'].forEach(a => all.getRange(a).setFormula('=TODAY()-1'));
+  // 前の版で 9/29 に取り込んだ患者一覧（最終通院日の列がなく、終了日の式はそのときの日付になっている）
+  const sh = t.ss.insertSheet('患者一覧');
+  sh.addDeveloperMetadata('cpapApp', 'ledger');
+  sh.getRange(1, 1, 1, 13).setValues([['ID', '名前', '機器', '業者', 'クラウド区分', 'レポート開始日', 'レポート終了日', '対象',
+    '導入日', '離脱日', '備考', '状態', '離脱理由']]);
+  sh.getRange(2, 1, 4, 13).setValues([
+    [1, '前版 太郎', 'SBOX', 'RISEF', 'SEFAM', d(2026, 9, 5), d(2026, 9, 28), '○', d(2025, 1, 10), '', '', '利用中', ''],
+    [2, '前版 花子', 'AirMini', 'RISEF', 'AirView', d(2026, 9, 1), d(2026, 9, 30), '○', d(2024, 3, 3), '', '', '利用中', ''],
+    [3, '前版 三郎', 'SBOX', 'RISEF', 'SEFAM', d(2026, 9, 9), d(2026, 9, 28), '', d(2025, 2, 2), '', '', '利用中', ''],
+    [4, '前版 四郎', 'SBOX', 'RISEF', 'SEFAM', '', '', '', d(2025, 4, 4), '', '', '利用中', '']]);
+
+  test('セットアップで、空欄の最終通院日を旧ALLから入れる（期間が取り込んだときのままなら終了日も式に）', () => {
+    gs.setup();
+    const ask = t.state.alerts.find(a => a.title === '最終通院日の取り込み');
+    assert.ok(ask, '確認が出ていない');
+    assert.ok(ask.prompt.includes('2人に旧データの最終通院日（うち 1人はレポート終了日を「いつも昨日」の式に戻す）'), ask.prompt);
+    assert.ok(!t.state.alerts.some(a => a.title === '旧データの取り込み'), '患者がいるときは、全体の取り込みは聞かない');
+    const ledger = t.sheet('患者一覧');
+    assert.strictEqual(t.display('患者一覧', 'J1')[0][0], '最終通院日');
+    assert.deepStrictEqual(t.display('患者一覧', 'F2:J5'), [
+      ['2026/09/05', '2026/09/30', '○', '2025/01/10', '2026/09/05'],
+      ['2026/09/01', '2026/09/30', '○', '2024/03/03', '2026/08/20'],
+      ['2026/09/09', '2026/09/28', '', '2025/02/02', ''],
+      ['', '', '', '2025/04/04', '']]);
+    assert.strictEqual(ledger.getRange('G2').getFormula(), '=TODAY()-1', '期間が取り込んだときのままなら式に戻す');
+    assert.strictEqual(ledger.getRange('G3').getFormula(), '', '期間を変えた人は終了日をそのまま');
+    assert.strictEqual(ledger.getRange('G4').getFormula(), '', 'ID が同じでも名前が違う人には入れない');
+    assert.strictEqual(ledger.getLastRow(), 5, 'セットアップでは新しい人は足さない');
+    const done = t.state.alerts.find(a => a.title === 'セットアップ完了');
+    assert.ok(done.prompt.includes('最終通院日が空欄だった 2人に、旧データの最終通院日を入れました。'), done.prompt);
+    assert.ok(!done.prompt.includes('人を取り込みました'), done.prompt);
+  });
+
+  test('もう一度セットアップしても聞かない／取り込みメニューでは、いない人だけを足す', () => {
+    const n = t.state.alerts.length;
+    gs.setup();
+    assert.ok(!t.state.alerts.slice(n).some(a => a.title === '最終通院日の取り込み'));
+    gs.importOldData();
+    const a = t.state.alerts.filter(x => x.title === '旧データの取り込み').pop();
+    assert.ok(a.prompt.includes('1人を') && a.prompt.includes('4人は飛ばします'), a.prompt);
+    assert.ok(!a.prompt.includes('旧データの最終通院日'), a.prompt);
+    assert.deepStrictEqual(t.display('患者一覧', 'B6:J6')[0],
+      ['新規 五郎', 'SBOX', 'RISEF', 'SEFAM', '2026/09/01', '2026/09/30', '', '2026/09/01', '2026/09/01']);
+    assert.strictEqual(t.sheet('患者一覧').getRange('G6').getFormula(), '=TODAY()-1');
+  });
+
+  test('取り込みメニューからも、空欄の最終通院日を入れられる', () => {
+    t.sheet('患者一覧').getRange('J3').clearContent();
+    gs.importOldData();
+    const a = t.state.alerts.filter(x => x.title === '旧データの取り込み').pop();
+    assert.ok(a.prompt.includes('0人を') && a.prompt.includes('1人に旧データの最終通院日を入れます。'), a.prompt);
+    assert.strictEqual(t.display('患者一覧', 'J3')[0][0], '2026/08/20');
+    assert.strictEqual(t.sheet('患者一覧').getRange('G3').getFormula(), '', '期間を変えた人は終了日をそのまま');
+    const done = t.state.alerts.filter(x => x.title === '取り込み完了').pop();
+    assert.ok(done.prompt.includes('最終通院日が空欄だった 1人に'), done.prompt);
+  });
+  finish();
+}
+
+// =====================================================================
 // シナリオ：同じ名前のシートがすでにある
 // =====================================================================
 function scenarioCollision() {
@@ -1071,5 +1147,6 @@ function scenarioTz() {
   finish();
 }
 
-({ main: scenarioMain, import: scenarioImport, upgrade: scenarioUpgrade, collision: scenarioCollision, big: scenarioBig,
+({ main: scenarioMain, import: scenarioImport, upgrade: scenarioUpgrade, refill: scenarioRefill, collision: scenarioCollision,
+   big: scenarioBig,
    tz: scenarioTz })[scenario]();

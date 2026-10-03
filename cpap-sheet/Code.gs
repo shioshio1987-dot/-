@@ -279,6 +279,20 @@ function setup() {
         '旧バージョンの「ALL」シートが見つかりました。患者データを「' + SH.ledger + '」に取り込みますか？\n' +
         '（ALLシートは変更せず、そのまま残します）', ui.ButtonSet.YES_NO);
       if (ans === ui.Button.YES) notes.push('・' + runImport_(planImport_()).message);
+    } else if (findOldSheet_(OLD_ALL_NAMES)) {
+      // 取り込みずみ（最終通院日の列がない版で取り込んだなど）：空欄の最終通院日だけを旧ALLから入れる
+      try {
+        var fillPlan = planImport_();
+        if (fillPlan.fills.length && ui.alert('最終通院日の取り込み',
+            '「' + SH.ledger + '」で最終通院日が空欄の人のうち、' + fillsText_(fillPlan) + 'を入れますか？\n' +
+            '（ほかの欄と、旧「' + fillPlan.oldSheet.getName() + '」シートは変えません）', ui.ButtonSet.YES_NO) === ui.Button.YES) {
+          fillPlan.rows = [];
+          fillPlan.fillsOnly = true;
+          notes.push('・' + runImport_(fillPlan).message);
+        }
+      } catch (eFill) {
+        notes.push('・旧データの最終通院日を読めませんでした：' + eFill.message);
+      }
     }
 
     var r = refreshAll_({ wait: 30000 });
@@ -2170,6 +2184,7 @@ function importOldData() {
     }
     var msg = '「' + plan.oldSheet.getName() + '」から ' + plan.rows.length + '人を「' + SH.ledger + '」に取り込みます。';
     if (plan.skipped) msg += '\n（すでに' + SH.ledger + 'にいる ' + plan.skipped + '人は飛ばします）';
+    if (plan.fills.length) msg += '\n' + fillsText_(plan) + 'を入れます。';
     if (plan.missingHeads.length) msg += '\n※ 旧シートに見つからない列：' + plan.missingHeads.join('・');
     msg += '\n\n次回予定日・自動計算の列などは新しい表にないため取り込みません（最終通院日・対象の○・クラウド区分は取り込みます）。' +
       '\n「' + plan.oldSheet.getName() + '」シートは変更せず、そのまま残します。\n\n実行しますか？';
@@ -2183,7 +2198,7 @@ function importOldData() {
 /** 旧ALLシートを読み、取り込む行を用意する（まだ書き込まない） */
 function planImport_() {
   initTz_();
-  var plan = { oldSheet: findOldSheet_(OLD_ALL_NAMES), rows: [], skipped: 0, missingHeads: [] };
+  var plan = { oldSheet: findOldSheet_(OLD_ALL_NAMES), rows: [], skipped: 0, missingHeads: [], fills: [] };
   if (!plan.oldSheet) return plan;
   var dataRange = plan.oldSheet.getDataRange();
   var data = dataRange.getValues();
@@ -2201,14 +2216,19 @@ function planImport_() {
   var ledger = findSheet_('ledger');
   var c = ledgerCols_(ledger);
   requireCols_(c);
-  var have = ledger.getLastRow() >= 2 ? ledger.getRange(2, 1, ledger.getLastRow() - 1, c.lastCol).getValues() : [];
-  var ids = {};
-  var keys = {};
-  have.forEach(function (r) {
+  var nHave = Math.max(ledger.getLastRow() - 1, 0);
+  var have = nHave ? ledger.getRange(2, 1, nHave, c.lastCol).getValues() : [];
+  var haveEnd = nHave ? ledger.getRange(2, c.repEnd, nHave, 1).getFormulas() : [];
+  // ID・名前＋導入日 → 患者一覧の何番目か（この取り込みで足す人は -1）
+  var ids = Object.create(null);
+  var keys = Object.create(null);
+  have.forEach(function (r, j) {
     var id = trim_(r[c.id - 1]);
-    if (id) ids[id] = true;
-    if (trim_(r[c.name - 1])) keys[nameKey_(r[c.name - 1]) + '|' + dateKey_(r[c.intro - 1])] = true;
+    if (id && !(id in ids)) ids[id] = j;
+    var k = nameKey_(r[c.name - 1]) + '|' + dateKey_(r[c.intro - 1]);
+    if (trim_(r[c.name - 1]) && !(k in keys)) keys[k] = j;
   });
+  var filled = {};
 
   var today = todayDn_();
   for (var i = 1; i < data.length; i++) {
@@ -2218,9 +2238,31 @@ function planImport_() {
     if (!name) continue;
     var id = trim_(get('id'));
     var key = nameKey_(name) + '|' + dateKey_(get('intro'));
-    if ((id && ids[id]) || keys[key]) { plan.skipped++; continue; }
-    if (id) ids[id] = true;
-    keys[key] = true;
+    var idHit = id !== '' && id in ids;
+    if (idHit || key in keys) {
+      plan.skipped++;
+      // すでにいる人：最終通院日が空欄なら、旧ALLの最終通院日を入れる（前の版で取り込んだ人のため。
+      // ID が同じでも名前が違う人には入れない）
+      var j = -1;
+      [idHit ? ids[id] : -1, key in keys ? keys[key] : -1].forEach(function (x) {
+        if (j < 0 && x >= 0 && nameKey_(have[x][c.name - 1]) === nameKey_(name)) j = x;
+      });
+      var visit = importDate_(get('visit'), today);
+      if (j >= 0 && !filled[j] && visit instanceof Date && trim_(have[j][c.visit - 1]) === '') {
+        filled[j] = true;
+        var oldStart = dnOf_(get('repStart'), today);
+        plan.fills.push({
+          row: j + 2, name: nameKey_(name), visit: visit,
+          // 旧ALLの終了日が「いつも昨日」の式で、期間が取り込んだときのまま（開始日が同じ・終了日が固定の日付）なら式に戻す
+          endFormula: idx.repEnd >= 0 && isEndFormula_(formulas[i][idx.repEnd]) && !haveEnd[j][0] &&
+            oldStart !== null && dnOf_(have[j][c.repStart - 1], today) === oldStart &&
+            dnOf_(have[j][c.repEnd - 1], today) !== null
+        });
+      }
+      continue;
+    }
+    if (id) ids[id] = -1;
+    keys[key] = -1;
     var oldStatus = trim_(get('status'));
     var note = trim_(get('note'));
     var rec = {
@@ -2250,7 +2292,7 @@ function runImport_(plan) {
   var ledger = findSheet_('ledger');
   var c = ledgerCols_(ledger);
   requireCols_(c);
-  var master = importOldMaster_(plan.rows);
+  var master = plan.fillsOnly ? { fromConfig: 0, added: [] } : importOldMaster_(plan.rows);
   if (plan.rows.length) {
     var info = nextIdInfo_(columnValues_(ledger, c.id).concat(plan.rows.map(function (r) { return r.id; })));
     plan.rows.forEach(function (r) { if (r.id === '' && info.auto) r.id = info.next++; });
@@ -2261,9 +2303,28 @@ function runImport_(plan) {
         .setValues(plan.rows.map(function (r) { return [r[col.key] === undefined ? '' : r[col.key]]; }));
     });
   }
+  var fills = 0;
+  var ends = 0;
+  if (plan.fills && plan.fills.length) {
+    var names = columnValues_(ledger, c.name);
+    var visits = columnValues_(ledger, c.visit);
+    plan.fills.forEach(function (f) {
+      if (nameKey_(names[f.row - 2]) !== f.name || trim_(visits[f.row - 2]) !== '') return;
+      ledger.getRange(f.row, c.visit).setValue(f.visit);
+      fills++;
+      if (f.endFormula) { ledger.getRange(f.row, c.repEnd).setFormula(END_FORMULA); ends++; }
+    });
+  }
   applyLedgerRules_();
-  var msg = plan.rows.length + '人を取り込みました。';
-  if (plan.skipped) msg += '（すでにいた ' + plan.skipped + '人は飛ばしました）';
+  var msg = '';
+  if (plan.rows.length || !fills) {
+    msg = plan.rows.length + '人を取り込みました。';
+    if (plan.skipped) msg += '（すでにいた ' + plan.skipped + '人は飛ばしました）';
+  }
+  if (fills) {
+    msg += (msg ? '\n' : '') + '最終通院日が空欄だった ' + fills + '人に、旧データの最終通院日を入れました。' +
+      (ends ? '（うち ' + ends + '人はレポート終了日を「いつも昨日」の式に戻しました）' : '');
+  }
   if (master.fromConfig) msg += '\n旧「設定」から料金などを ' + master.fromConfig + '件［マスタ］に反映しました。';
   if (master.added.length) msg += '\n［マスタ］にない組み合わせを追加しました：' + master.added.join('、') + '（確認してください）';
   return { message: msg };
@@ -2364,6 +2425,13 @@ function importOldMaster_(rows) {
     });
   }
   return res;
+}
+
+/** 「N人に旧データの最終通院日（うち M人はレポート終了日を「いつも昨日」の式に）」 */
+function fillsText_(plan) {
+  var ends = plan.fills.filter(function (f) { return f.endFormula; }).length;
+  return plan.fills.length + '人に旧データの最終通院日' +
+    (ends ? '（うち ' + ends + '人はレポート終了日を「いつも昨日」の式に戻す）' : '');
 }
 
 /** 旧バージョンの終了日の「いつも昨日」の式（=TODAY()-1）か */
